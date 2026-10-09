@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFmpeg Web 转码工具</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>🎬 FFmpeg Web 转码工具</h1>
+  <div class="status" id="ffmpegStatus">检测中…</div>
+</header>
+
+<div class="layout">
+  <!-- ============ 左：文件浏览 ============ -->
+  <div class="panel panel-left">
+    <h2>文件浏览</h2>
+
+    <div class="path-bar">
+      <input type="text" id="pathInput" value="{{ media_dir }}">
+      <button onclick="loadPath(document.getElementById('pathInput').value)">跳转</button>
+    </div>
+
+    <div class="favorites">
+      <div class="fav-header">
+        <span class="fav-title">⭐ 收藏夹</span>
+        <button class="fav-add" onclick="addCurrentToFavorites()" title="收藏当前目录">+</button>
+      </div>
+      <div class="fav-list" id="favList"></div>
+    </div>
+
+    <ul class="filelist" id="filelist"></ul>
+  </div>
+
+  <!-- ============ 中：批量队列 ============ -->
+  <div class="panel panel-mid">
+    <div class="queue-header">
+      <h2 style="margin:0">批量队列 <span id="queueCount" class="queue-count">0</span></h2>
+      <div class="queue-header-btns">
+        <button class="queue-btn" onclick="clearCompleted()" title="清空已完成">清完成</button>
+        <button class="queue-btn danger" onclick="clearQueue()" title="清空全部">清空</button>
+      </div>
+    </div>
+
+    <div class="queue-hint" id="queueHint">
+      在左侧文件上悬停点 + 加入队列<br>
+      支持批量去片头片尾、批量转码
+    </div>
+
+    <div class="queue-scroll" id="queueScroll">
+      <ul class="queue-list" id="queueList"></ul>
+    </div>
+
+    <div class="queue-footer" id="queueFooter" style="display:none;">
+      <div class="queue-progress">
+        <div class="queue-progress-bar" id="queueProgressBar"></div>
+      </div>
+      <div class="queue-progress-text" id="queueProgressText"></div>
+    </div>
+  </div>
+
+  <!-- ============ 右：配置 ============ -->
+  <div class="panel panel-right">
+    <div class="info-box" id="infoBox" style="display:none"></div>
+
+    <h2>剪辑</h2>
+
+    <div class="video-area" id="videoArea">
+      <video id="player" controls preload="metadata"></video>
+      <div class="placeholder" id="videoPlaceholder">
+        🎞️ 从左侧选择视频文件进行预览
+      </div>
+    </div>
+
+    <div class="clip-bar" id="clipBar">
+      <div class="clip-bar-active" id="clipBarActive" style="left:0%; right:0%;"></div>
+    </div>
+    <div class="clip-time-tip">
+      <span id="clipStartTip">00:00:00</span>
+      <span id="clipEndTip">--:--:--</span>
+    </div>
+
+    <div class="clip-section-label">单文件精确剪辑（选文件时生效）</div>
+
+    <div class="clip-row" style="margin-top:10px">
+      <div class="clip-label">起始</div>
+      <div class="input-with-btn">
+        <input type="text" id="startTime" value="00:00:00" placeholder="00:00:00">
+        <button type="button" onclick="setStartFromPlayer()">⏱ 当前</button>
+      </div>
+    </div>
+
+    <div class="clip-row" style="margin-top:8px">
+      <div class="clip-label">结束</div>
+      <div class="input-with-btn">
+        <input type="text" id="endTime" placeholder="到结尾">
+        <button type="button" onclick="setEndFromPlayer()">⏱ 当前</button>
+      </div>
+    </div>
+
+    <div class="hint" id="durationHint" style="margin-top:8px">📐 剪辑时长：--</div>
+
+    <div class="batch-clip-section">
+      <div class="batch-clip-header">
+        <span class="batch-clip-title">📦 批量裁剪</span>
+        <span class="batch-clip-hint">仅批量处理时生效 · 常用去片头片尾</span>
+      </div>
+      <div class="row">
+        <div class="form-group">
+          <label>片头裁剪</label>
+          <input type="text" id="headTrim" value="00:00:00" placeholder="如 00:00:30">
+          <div class="hint">从每个文件开头去掉这段时长</div>
+        </div>
+        <div class="form-group">
+          <label>片尾裁剪</label>
+          <input type="text" id="tailTrim" value="00:00:00" placeholder="如 00:01:00">
+          <div class="hint">从每个文件结尾去掉这段时长</div>
+        </div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:18px">转码参数</h2>
+
+    <div class="recommend-box" id="recommendBox" style="display:none;">
+      <div class="recommend-icon">💡</div>
+      <div class="recommend-content">
+        <div class="recommend-title" id="recommendTitle"></div>
+        <div class="recommend-hint" id="recommendHint"></div>
+      </div>
+      <div class="recommend-actions">
+        <button class="recommend-apply" id="applyCpuBtn" onclick="applyRecommendation('cpu')">CPU</button>
+        <button class="recommend-apply recommend-gpu" id="applyGpuBtn" onclick="applyRecommendation('gpu')" style="display:none;">GPU</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>转码方式</label>
+        <select id="platform" onchange="onPlatformChange()">
+          <option value="copy" selected>⚡ 不转码（copy，仅剪辑）</option>
+          <option value="smart">🧠 智能选择（按源自动，推荐批量）</option>
+          <option value="software">💻 软件编码（CPU，画质最佳）</option>
+          <option value="nvenc">🟢 NVIDIA NVENC（显卡加速）</option>
+          <option value="qsv">🔵 Intel QSV（核显加速）</option>
+          <option value="amf">🔴 AMD AMF（显卡加速）</option>
+          <option value="vaapi">🐧 VAAPI（Linux 通用）</option>
+        </select>
+        <div class="hint" id="platformHint"></div>
+      </div>
+      <div class="form-group">
+        <label>编码格式</label>
+        <select id="format" onchange="onPlatformChange()">
+          <option value="h264">H.264（兼容性最好）</option>
+          <option value="h265">H.265 / HEVC（更小）</option>
+          <option value="av1">AV1（最小，最慢）</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row-3">
+      <div class="form-group">
+        <label id="qualityLabel">CRF 质量</label>
+        <input type="number" id="qualityValue" value="23" min="0" max="51">
+        <div class="hint" id="qualityHint">越小越好，18-28 常用</div>
+      </div>
+      <div class="form-group">
+        <label id="presetLabel">Preset</label>
+        <select id="preset">
+          <option value="ultrafast">ultrafast</option>
+          <option value="fast">fast</option>
+          <option value="medium" selected>medium</option>
+          <option value="slow">slow</option>
+          <option value="veryslow">veryslow</option>
+          <option value="p1">p1 (最快)</option>
+          <option value="p2">p2</option>
+          <option value="p3">p3</option>
+          <option value="p4">p4 (均衡)</option>
+          <option value="p5">p5</option>
+          <option value="p6">p6</option>
+          <option value="p7">p7 (最佳)</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>音频编码</label>
+        <select id="acodec">
+          <option value="copy">copy</option>
+          <option value="aac">AAC</option>
+          <option value="libopus">Opus</option>
+          <option value="libmp3lame">MP3</option>
+          <option value="ac3">AC3</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>质量模式</label>
+        <select id="qualityMode" onchange="onQualityModeChange()">
+          <option value="quality">恒定质量（推荐）</option>
+          <option value="bitrate">目标码率（控制大小）</option>
+        </select>
+      </div>
+      <div class="form-group" id="bitrateGroup" style="display:none">
+        <label>目标码率</label>
+        <input type="text" id="bitrate" placeholder="如 5M / 8000k">
+      </div>
+      <div class="form-group" id="abitrateGroup">
+        <label>音频码率</label>
+        <input type="text" id="abitrate" value="192k">
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="form-group">
+        <label>分辨率缩放（可选）</label>
+        <input type="text" id="scale" placeholder="如 1920:1080 或 -2:720">
+        <div class="hint" id="scaleHint">硬件加速时会自动用 GPU 缩放</div>
+      </div>
+      <div class="form-group">
+        <label>额外参数（可选）</label>
+        <input type="text" id="extra" placeholder="如 -map 0:v:0 -map 0:a:0">
+      </div>
+    </div>
+
+    <h2 style="margin-top:18px">输入输出</h2>
+
+    <div class="form-group">
+      <label>输入文件</label>
+      <input type="text" id="inputPath" readonly placeholder="从左侧选择一个视频文件">
+    </div>
+
+    <div class="form-group">
+      <label>输出文件</label>
+      <input type="text" id="outputPath" placeholder="/path/to/output.mp4">
+    </div>
+
+    <div class="output-presets">
+      <div class="fav-header">
+        <span class="fav-title">📁 输出目录</span>
+        <button class="fav-add" onclick="addCurrentOutputDir()" title="把当前输出文件的目录收藏">+</button>
+      </div>
+      <div class="fav-list" id="outputDirList"></div>
+    </div>
+
+    <div class="action-row">
+      <button class="primary" id="submitBtn" onclick="submitTask()">开始转码</button>
+      <button class="stop-btn" id="stopBtn" onclick="stopTask()" style="display:none;">中止</button>
+    </div>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-bar"><div id="progressFill"></div></div>
+      <div class="progress-text">
+        <span id="progressPct">0%</span>
+        <span id="taskState" class="tag-status s-pending">pending</span>
+      </div>
+    </div>
+
+    <div class="log-box" id="logBox"></div>
+  </div>
+</div>
+
+<script>
+  window.MEDIA_DIR = "{{ media_dir }}";
+</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
