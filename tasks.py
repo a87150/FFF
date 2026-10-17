@@ -267,31 +267,32 @@ class TaskManager:
                 stderr_thread.join(timeout=5)
 
                 with self._tasks_lock:
-                    cancelled = self._tasks[task_id].get("cancelled", False)
-                    if cancelled:
-                        self._tasks[task_id]["status"] = "cancelled"
-                        self._tasks[task_id]["error"] = "用户已中止任务"
+                    task = self._tasks[task_id]
+                    if task.get("cancelled"):
+                        task["status"] = "cancelled"
+                        task["error"] = "用户已中止任务"
                     elif process.returncode == 0:
-                        self._tasks[task_id]["status"] = "completed"
-                        self._tasks[task_id]["progress"] = 100
+                        task["status"] = "completed"
+                        task["progress"] = 100
                     else:
-                        self._tasks[task_id]["status"] = "failed"
-                        self._tasks[task_id]["error"] = f"FFmpeg 退出码: {process.returncode}"
-                    self._tasks[task_id]["log"] = "\n".join(log_lines[-60:])
-                    self._tasks[task_id]["speed"] = ""
-                    self._tasks[task_id]["eta"] = None
-                    self._tasks[task_id]["end_time"] = datetime.now().isoformat()
+                        task["status"] = "failed"
+                        task["error"] = f"FFmpeg 退出码: {process.returncode}"
+                    task["log"] = "\n".join(log_lines[-60:])
+                    task["speed"] = ""
+                    task["eta"] = None
+                    task["end_time"] = datetime.now().isoformat()
 
             except Exception as e:
                 with self._tasks_lock:
-                    if self._tasks[task_id].get("cancelled"):
-                        self._tasks[task_id]["status"] = "cancelled"
-                        self._tasks[task_id]["error"] = "用户已中止任务"
+                    task = self._tasks[task_id]
+                    if task.get("cancelled"):
+                        task["status"] = "cancelled"
+                        task["error"] = "用户已中止任务"
                     else:
-                        self._tasks[task_id]["status"] = "failed"
-                        self._tasks[task_id]["error"] = str(e)
-                    self._tasks[task_id]["speed"] = ""
-                    self._tasks[task_id]["eta"] = None
+                        task["status"] = "failed"
+                        task["error"] = str(e)
+                    task["speed"] = ""
+                    task["eta"] = None
             finally:
                 with self._process_lock:
                     self._processes.pop(task_id, None)

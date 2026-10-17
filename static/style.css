@@ -95,15 +95,10 @@ h2 {
 .list-tools-btns button:disabled,
 .queue-btn:disabled { opacity: 0.45; cursor: default; }
 
-/* ===== 收藏夹 ===== */
-.favorites {
-  margin-bottom: 10px;
-  background: #23272e;
-  border-radius: 5px;
-  padding: 8px 10px;
-}
+/* ===== 收藏夹 / 输出目录（同款卡片） ===== */
+.favorites,
 .output-presets {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   background: #23272e;
   border-radius: 5px;
   padding: 8px 10px;
@@ -200,9 +195,10 @@ h2 {
 .list-tools-btns button.primary { background: #1a73e8; color: #fff; flex: 1.6; }
 .list-tools-btns button.primary:hover:not(:disabled) { background: #2b7de9; }
 
-/* ===== 文件列表 ===== */
+/* ===== 文件列表（左栏列表与文件夹选择器列表共用行样式） ===== */
 .filelist { list-style: none; padding: 0; margin: 0; }
-.filelist li {
+.filelist li,
+.modal-list li {
   padding: 7px 10px;
   border-radius: 4px;
   cursor: pointer;
@@ -211,7 +207,8 @@ h2 {
   gap: 8px;
   font-size: 13px;
 }
-.filelist li:hover { background: #2a2e35; }
+.filelist li:hover,
+.modal-list li:hover { background: #2a2e35; }
 .filelist li.picked { background: rgba(26, 115, 232, 0.14); }
 .filelist li.selected { background: #2d4a7a; }
 .filelist li .chk {
@@ -222,7 +219,8 @@ h2 {
   accent-color: #1a73e8;
   cursor: pointer;
 }
-.filelist li .name {
+.filelist li .name,
+.modal-list li .name {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -332,22 +330,7 @@ h2 {
   flex: 1;
   min-height: 180px;
 }
-.modal-list li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-}
-.modal-list li:hover { background: #2a2e35; }
-.modal-list li .name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 行样式与 .filelist li 共用，这里只保留空状态覆盖 */
 .modal-list li.empty { color: #666; cursor: default; font-style: italic; text-align: center; padding: 20px 0; }
 .modal-footer {
   display: flex;

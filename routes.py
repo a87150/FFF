@@ -31,6 +31,11 @@ def _normalize_dir_arg(path):
     return os.path.abspath(path)
 
 
+def _err(message, code=400):
+    """统一的错误响应"""
+    return jsonify({"error": message}), code
+
+
 @bp.route("/")
 def index():
     return render_template("index.html", ffmpeg_path=FFMPEG, media_dir=MEDIA_DIR)
@@ -42,9 +47,9 @@ def browse():
     path = _normalize_dir_arg(path)
 
     if not os.path.exists(path):
-        return jsonify({"error": f"路径不存在: {path}"}), 404
+        return _err(f"路径不存在: {path}", 404)
     if not os.path.isdir(path):
-        return jsonify({"error": "不是目录"}), 400
+        return _err("不是目录")
 
     try:
         entries = []
@@ -72,9 +77,9 @@ def browse():
 
         return jsonify({"path": path, "parent": parent, "items": entries})
     except PermissionError:
-        return jsonify({"error": "没有权限访问该目录"}), 403
+        return _err("没有权限访问该目录", 403)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _err(str(e), 500)
 
 
 @bp.route("/api/drives")
@@ -101,9 +106,9 @@ def scan():
     path = _normalize_dir_arg(path)
 
     if not os.path.exists(path):
-        return jsonify({"error": f"路径不存在: {path}"}), 404
+        return _err(f"路径不存在: {path}", 404)
     if not os.path.isdir(path):
-        return jsonify({"error": "不是目录"}), 400
+        return _err("不是目录")
 
     items, truncated = scan_videos(path, max_files=SCAN_MAX_FILES, max_dirs=SCAN_MAX_DIRS)
     return jsonify({"path": path, "count": len(items), "truncated": truncated, "items": items})
@@ -113,10 +118,10 @@ def scan():
 def info():
     filepath = request.args.get("path", "")
     if not filepath or not os.path.exists(filepath):
-        return jsonify({"error": "文件不存在"}), 404
+        return _err("文件不存在", 404)
     data = get_video_info(filepath)
     if not data or "error" in data:
-        return jsonify({"error": data.get("error", "无法读取视频信息") if data else "无法读取视频信息"}), 500
+        return _err((data or {}).get("error", "无法读取视频信息"), 500)
 
     result = {"format": {}, "video": [], "audio": []}
     fmt = data.get("format", {})
@@ -173,17 +178,17 @@ def transcode():
     extra = d.get("extra", "").strip()
 
     if not input_path or not os.path.exists(input_path):
-        return jsonify({"error": "输入文件不存在"}), 400
+        return _err("输入文件不存在")
     if not output_path:
-        return jsonify({"error": "请指定输出路径"}), 400
+        return _err("请指定输出路径")
     if same_file(input_path, output_path):
-        return jsonify({"error": "输出路径不能和输入相同"}), 400
+        return _err("输出路径不能和输入相同")
     if os.path.isdir(output_path):
-        return jsonify({"error": "输出路径是已存在的目录"}), 400
+        return _err("输出路径是已存在的目录")
 
     out_ext = output_ext(output_path)
     if not out_ext:
-        return jsonify({"error": "输出文件缺少扩展名，请指定如 .mp4 / .mkv"}), 400
+        return _err("输出文件缺少扩展名，请指定如 .mp4 / .mkv")
 
     # 覆盖保护：前端确认后带 overwrite=true 再次提交
     if os.path.exists(output_path) and not d.get("overwrite"):
@@ -193,13 +198,13 @@ def transcode():
     try:
         quality_value = int(float(str(quality_value)))
     except (TypeError, ValueError):
-        return jsonify({"error": "质量值必须是数字"}), 400
+        return _err("质量值必须是数字")
     quality_value = max(0, min(51, quality_value))
 
     if bitrate and not BITRATE_RE.match(bitrate):
-        return jsonify({"error": "目标码率格式不正确，示例：5M / 8000k"}), 400
+        return _err("目标码率格式不正确，示例：5M / 8000k")
     if scale and not SCALE_RE.match(scale):
-        return jsonify({"error": "缩放格式不正确，示例：1920:1080 或 -2:720"}), 400
+        return _err("缩放格式不正确，示例：1920:1080 或 -2:720")
     if platform_name in VALID_PRESETS and preset not in VALID_PRESETS[platform_name]:
         preset = DEFAULT_PRESETS[platform_name]
 
@@ -235,10 +240,10 @@ def transcode():
     if platform_name == "copy":
         err = check_copy_video_compat(out_ext, src_info)
         if err:
-            return jsonify({"error": err}), 400
+            return _err(err)
     elif out_ext == "webm" and fmt != "av1":
-        return jsonify({"error": "WebM 容器仅支持 VP8 / VP9 / AV1 视频，"
-                                 "请改输出扩展名（如 .mp4 / .mkv）或选择 AV1 编码"}), 400
+        return _err("WebM 容器仅支持 VP8 / VP9 / AV1 视频，"
+                    "请改输出扩展名（如 .mp4 / .mkv）或选择 AV1 编码")
 
     # ===== 音频兼容性检查 =====
     acodec, abitrate, auto_switched, audio_note = ensure_audio_compatible(
@@ -255,7 +260,7 @@ def transcode():
             platform_name, fmt, quality_value, bitrate, preset, scale
         )
         if enc is None:
-            return jsonify({"error": f"不支持的平台/格式组合：{platform_name}/{fmt}"}), 400
+            return _err(f"不支持的平台/格式组合：{platform_name}/{fmt}")
 
     cmd += pre_input
 
@@ -289,15 +294,16 @@ def transcode():
     elif total_duration:
         actual_duration = total_duration - start_sec
 
+    note = audio_note if auto_switched else ""
     task_id = manager.create_task(
         cmd, actual_duration,
         input_path=input_path, output_path=output_path,
-        audio_note=audio_note if auto_switched else "",
+        audio_note=note,
     )
     return jsonify({
         "task_id": task_id,
         "cmd": " ".join(cmd),
-        "audio_note": audio_note if auto_switched else "",
+        "audio_note": note,
     })
 
 
@@ -305,7 +311,7 @@ def transcode():
 def task_status(task_id):
     task = manager.get(task_id)
     if not task:
-        return jsonify({"error": "任务不存在"}), 404
+        return _err("任务不存在", 404)
     return jsonify(task)
 
 

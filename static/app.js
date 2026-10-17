@@ -1,10 +1,10 @@
 // ==================== 全局状态 ====================
+const $ = (id) => document.getElementById(id);   // getElementById 简写
 let currentDir = window.MEDIA_DIR || "/";
 let videoDuration = 0;
 let availableEncoders = {};
 let vaapiDeviceOk = false;
 let currentTaskId = null;
-let pollTimer = null;
 let outputManuallyEdited = false;
 let lastRecommendation = null;
 let currentSrcInfo = null;
@@ -25,17 +25,18 @@ const SETTING_IDS = ["platform", "format", "qualityMode", "qualityValue", "bitra
                      "preset", "scale", "acodec", "abitrate", "extra",
                      "headTrim", "tailTrim"];
 
-const TASK_STATE_TEXT = {
-  pending: "排队中",
-  running: "转码中",
-  completed: "完成",
-  failed: "失败",
-  cancelled: "已中止",
+// 任务状态映射：icon 用于队列行，tag 用于进度区状态标，text 用于队列状态文案
+const STATUS_MAP = {
+  pending:   { icon: "⏳", tag: "排队中", text: "待处理" },
+  running:   { icon: "▶",  tag: "转码中", text: "处理中" },
+  completed: { icon: "✓",  tag: "完成",   text: "完成" },
+  failed:    { icon: "✗",  tag: "失败",   text: "失败" },
+  cancelled: { icon: "⏸",  tag: "已中止", text: "已中止" },
 };
 
 // ==================== Toast 提示 ====================
 function toast(msg, type) {
-  const box = document.getElementById("toastBox");
+  const box = $("toastBox");
   if (!box) return;
   const el = document.createElement("div");
   el.className = "toast" + (type ? " toast-" + type : "");
@@ -58,10 +59,10 @@ function formatEta(sec) {
 }
 
 function updateProgressUI(t) {
-  document.getElementById("progressFill").style.width = (t.progress || 0) + "%";
-  document.getElementById("progressPct").textContent = (t.progress || 0).toFixed(1) + "%";
+  $("progressFill").style.width = (t.progress || 0) + "%";
+  $("progressPct").textContent = (t.progress || 0).toFixed(1) + "%";
 
-  const infoEl = document.getElementById("progressInfo");
+  const infoEl = $("progressInfo");
   if (infoEl) {
     const parts = [];
     if (t.status === "running") {
@@ -71,12 +72,12 @@ function updateProgressUI(t) {
     infoEl.textContent = parts.join(" · ");
   }
 
-  const stateEl = document.getElementById("taskState");
-  stateEl.textContent = TASK_STATE_TEXT[t.status] || t.status;
+  const stateEl = $("taskState");
+  stateEl.textContent = (STATUS_MAP[t.status] || {}).tag || t.status;
   stateEl.className = "tag-status s-" + t.status;
 
   if (t.log) {
-    const box = document.getElementById("logBox");
+    const box = $("logBox");
     box.textContent = t.log;
     box.scrollTop = box.scrollHeight;
   }
@@ -108,7 +109,7 @@ function joinPath(dir, filename) {
 
 // ==================== FFmpeg 检测 ====================
 fetch("/api/ffmpeg_check").then(r => r.json()).then(d => {
-  const el = document.getElementById("ffmpegStatus");
+  const el = $("ffmpegStatus");
   if (d.ok) {
     let ver = "";
     if (d.version) {
@@ -130,7 +131,7 @@ fetch("/api/ffmpeg_check").then(r => r.json()).then(d => {
 
 // 已保存的平台如果在本机不可用，自动回退（优先软件编码，其次智能/复制）
 function ensurePlatformValid() {
-  const sel = document.getElementById("platform");
+  const sel = $("platform");
   const current = sel.options[sel.selectedIndex];
   if (current && !current.disabled) return;
   for (const val of ["software", "smart", "copy"]) {
@@ -151,7 +152,7 @@ function updatePlatformOptions() {
     copy: ["libx264"],
     smart: ["libx264"],
   };
-  const sel = document.getElementById("platform");
+  const sel = $("platform");
   for (const opt of sel.options) {
     const p = opt.value;
     if (p === "copy" || p === "smart") continue;
@@ -170,17 +171,17 @@ function updatePlatformOptions() {
 // ==================== 转码平台切换 ====================
 // keepPreset=true 时不重置 preset（用于页面加载后重新校验的调用）
 function onPlatformChange(keepPreset) {
-  const platform = document.getElementById("platform").value;
-  const formatSelect = document.getElementById("format");
-  const qualityLabel = document.getElementById("qualityLabel");
-  const qualityHint = document.getElementById("qualityHint");
-  const presetSelect = document.getElementById("preset");
-  const presetLabel = document.getElementById("presetLabel");
-  const qualityValue = document.getElementById("qualityValue");
-  const bitrateInput = document.getElementById("bitrate");
-  const scaleInput = document.getElementById("scale");
-  const platformHint = document.getElementById("platformHint");
-  const qualityModeSel = document.getElementById("qualityMode");
+  const platform = $("platform").value;
+  const formatSelect = $("format");
+  const qualityLabel = $("qualityLabel");
+  const qualityHint = $("qualityHint");
+  const presetSelect = $("preset");
+  const presetLabel = $("presetLabel");
+  const qualityValue = $("qualityValue");
+  const bitrateInput = $("bitrate");
+  const scaleInput = $("scale");
+  const platformHint = $("platformHint");
+  const qualityModeSel = $("qualityMode");
 
   // 先恢复所有
   qualityValue.disabled = false;
@@ -201,9 +202,9 @@ function onPlatformChange(keepPreset) {
     scaleInput.disabled = true;
     formatSelect.disabled = true;
     qualityModeSel.disabled = true;
-    document.getElementById("bitrateGroup").style.display = "none";
+    $("bitrateGroup").style.display = "none";
     platformHint.textContent = "只做剪切/封装，速度极快；copy 按关键帧对齐，剪辑起点可能有几秒偏差，需要精确请改用转码";
-    if (!outputManuallyEdited) updateOutputPath();
+    updateOutputPath();
     return;
   }
 
@@ -217,7 +218,7 @@ function onPlatformChange(keepPreset) {
     // scale 保留可用（缩放是独立策略）
     formatSelect.disabled = true;
     qualityModeSel.disabled = true;
-    document.getElementById("bitrateGroup").style.display = "none";
+    $("bitrateGroup").style.display = "none";
 
     const gpu = pickGpuPlatform();
     if (gpu) {
@@ -225,7 +226,7 @@ function onPlatformChange(keepPreset) {
     } else {
       platformHint.textContent = "按每个源自动分析，使用 CPU 编码。适合批量";
     }
-    if (!outputManuallyEdited) updateOutputPath();
+    updateOutputPath();
     return;
   }
 
@@ -275,11 +276,11 @@ function onPlatformChange(keepPreset) {
   }
 
   onQualityModeChange();
-  if (!outputManuallyEdited) updateOutputPath();
+  updateOutputPath();
 }
 
 function enablePresets(list) {
-  const presetSelect = document.getElementById("preset");
+  const presetSelect = $("preset");
   let firstEnabled = null;
   for (const opt of presetSelect.options) {
     const ok = list.includes(opt.value);
@@ -293,14 +294,14 @@ function enablePresets(list) {
 }
 
 function onQualityModeChange() {
-  const platform = document.getElementById("platform").value;
-  const mode = document.getElementById("qualityMode").value;
-  const bg = document.getElementById("bitrateGroup");
-  const qv = document.getElementById("qualityValue");
-  const br = document.getElementById("bitrate");
-  const presetSelect = document.getElementById("preset");
-  const formatSelect = document.getElementById("format");
-  const scaleInput = document.getElementById("scale");
+  const platform = $("platform").value;
+  const mode = $("qualityMode").value;
+  const bg = $("bitrateGroup");
+  const qv = $("qualityValue");
+  const br = $("bitrate");
+  const presetSelect = $("preset");
+  const formatSelect = $("format");
+  const scaleInput = $("scale");
 
   if (platform === "copy" || platform === "smart") {
     bg.style.display = "none";
@@ -326,7 +327,7 @@ function onQualityModeChange() {
 function saveSettings() {
   const data = {};
   SETTING_IDS.forEach(id => {
-    const el = document.getElementById(id);
+    const el = $(id);
     if (el) data[id] = el.value;
   });
   try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (e) {}
@@ -337,7 +338,7 @@ function loadSettings() {
   try { data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
   catch (e) { data = {}; }
 
-  const platformSel = document.getElementById("platform");
+  const platformSel = $("platform");
   if (data.platform && Array.from(platformSel.options).some(o => o.value === data.platform)) {
     platformSel.value = data.platform;
   }
@@ -346,7 +347,7 @@ function loadSettings() {
   ["format", "qualityMode", "qualityValue", "bitrate", "preset",
    "scale", "acodec", "abitrate", "extra", "headTrim", "tailTrim"].forEach(id => {
     if (data[id] == null) return;
-    const el = document.getElementById(id);
+    const el = $(id);
     if (!el) return;
     if (el.tagName === "SELECT") {
       const opt = Array.from(el.options).find(o => o.value === data[id]);
@@ -358,7 +359,7 @@ function loadSettings() {
   onQualityModeChange();
 
   SETTING_IDS.forEach(id => {
-    const el = document.getElementById(id);
+    const el = $(id);
     if (!el) return;
     ["change", "input"].forEach(ev => el.addEventListener(ev, saveSettings));
   });
@@ -491,11 +492,11 @@ function resolveSmartParams(srcInfo) {
 }
 
 function renderRecommendation(info) {
-  const box = document.getElementById("recommendBox");
-  const title = document.getElementById("recommendTitle");
-  const hint = document.getElementById("recommendHint");
-  const btnCpu = document.getElementById("applyCpuBtn");
-  const btnGpu = document.getElementById("applyGpuBtn");
+  const box = $("recommendBox");
+  const title = $("recommendTitle");
+  const hint = $("recommendHint");
+  const btnCpu = $("applyCpuBtn");
+  const btnGpu = $("applyGpuBtn");
 
   lastRecommendation = recommendSettings(info);
   if (!lastRecommendation) {
@@ -532,28 +533,28 @@ function applyRecommendation(mode) {
     preset = rec.gpuPreset;
   }
 
-  document.getElementById("platform").value = platform;
-  document.getElementById("format").value = "h265";
+  $("platform").value = platform;
+  $("format").value = "h265";
   onPlatformChange();
 
   if (rec.mode === "bitrate") {
-    document.getElementById("qualityMode").value = "bitrate";
-    document.getElementById("bitrate").value = rec.bitrate;
-    document.getElementById("qualityValue").value = qualityValue;
+    $("qualityMode").value = "bitrate";
+    $("bitrate").value = rec.bitrate;
+    $("qualityValue").value = qualityValue;
   } else {
-    document.getElementById("qualityMode").value = "quality";
-    document.getElementById("qualityValue").value = qualityValue;
-    document.getElementById("bitrate").value = "";
+    $("qualityMode").value = "quality";
+    $("qualityValue").value = qualityValue;
+    $("bitrate").value = "";
   }
   onQualityModeChange();
-  document.getElementById("preset").value = preset;
+  $("preset").value = preset;
 
-  if (!outputManuallyEdited) updateOutputPath();
+  updateOutputPath();
   saveSettings();
 
   const btn = (mode === "gpu")
-    ? document.getElementById("applyGpuBtn")
-    : document.getElementById("applyCpuBtn");
+    ? $("applyGpuBtn")
+    : $("applyCpuBtn");
   if (btn) {
     const orig = btn.textContent;
     btn.textContent = "✓ 已应用";
@@ -563,23 +564,23 @@ function applyRecommendation(mode) {
 
 // ==================== 输出路径智能生成 ====================
 function isClipping() {
-  const s = document.getElementById("startTime").value.trim();
-  const e = document.getElementById("endTime").value.trim();
+  const s = $("startTime").value.trim();
+  const e = $("endTime").value.trim();
   if ((s && s !== "00:00:00") || e) return true;
-  const h = document.getElementById("headTrim").value.trim();
-  const t = document.getElementById("tailTrim").value.trim();
+  const h = $("headTrim").value.trim();
+  const t = $("tailTrim").value.trim();
   if ((h && h !== "00:00:00") || (t && t !== "00:00:00")) return true;
   return false;
 }
 
 function isTranscoding() {
-  return document.getElementById("platform").value !== "copy";
+  return $("platform").value !== "copy";
 }
 
 function currentCodecTag() {
-  const p = document.getElementById("platform").value;
+  const p = $("platform").value;
   if (p === "smart") return "h265";  // 智能模式默认输出 H.265
-  return (document.getElementById("format").value || "h264").toLowerCase();
+  return ($("format").value || "h264").toLowerCase();
 }
 
 function calcSuffix(sameDir) {
@@ -608,59 +609,53 @@ function computeOutputPath(inputPath) {
   return joinPath(dir, base + suffix + outExt);
 }
 
+// 用户没手动改过输出路径时，按当前输入自动生成（手动改过则保持不动）
 function updateOutputPath() {
-  const inputPath = document.getElementById("inputPath").value;
+  if (outputManuallyEdited) return;
+  const inputPath = $("inputPath").value;
   if (!inputPath) return;
-  document.getElementById("outputPath").value = computeOutputPath(inputPath);
+  $("outputPath").value = computeOutputPath(inputPath);
 }
 
 function onTimeChanged() {
   updateClipUI();
-  if (!outputManuallyEdited) updateOutputPath();
+  updateOutputPath();
 }
 
-document.getElementById("outputPath").addEventListener("input", () => {
+$("outputPath").addEventListener("input", () => {
   outputManuallyEdited = true;
 });
 
 // 批量裁剪输入格式化
 function setupTrimInput(id) {
-  const el = document.getElementById(id);
+  const el = $(id);
   el.addEventListener("blur", function () {
     const v = this.value.trim();
     this.value = v === "" ? "00:00:00" : formatTime(parseTime(v));
-    if (!outputManuallyEdited) updateOutputPath();
+    updateOutputPath();
   });
   el.addEventListener("keydown", e => {
     if (e.key === "Enter") e.target.blur();
   });
   el.addEventListener("input", () => {
-    if (!outputManuallyEdited) updateOutputPath();
+    updateOutputPath();
   });
 }
 setupTrimInput("headTrim");
 setupTrimInput("tailTrim");
 
 // ==================== 批量队列 ====================
-const STATUS_MAP = {
-  pending:   { icon: "⏳", text: "待处理" },
-  running:   { icon: "▶",  text: "处理中" },
-  completed: { icon: "✓",  text: "完成" },
-  failed:    { icon: "✗",  text: "失败" },
-  cancelled: { icon: "⏸",  text: "已中止" },
-};
-
 function renderQueue() {
-  const ul = document.getElementById("queueList");
-  const countEl = document.getElementById("queueCount");
-  const hintEl = document.getElementById("queueHint");
+  const ul = $("queueList");
+  const countEl = $("queueCount");
+  const hintEl = $("queueHint");
 
   countEl.textContent = batchQueue.length;
   ul.innerHTML = "";
 
   if (batchQueue.length === 0) {
     hintEl.style.display = "block";
-    document.getElementById("queueFooter").style.display = "none";
+    $("queueFooter").style.display = "none";
     return;
   }
   hintEl.style.display = "none";
@@ -706,15 +701,15 @@ function renderQueue() {
 
   // 底部进度
   if (isBatchRunning) {
-    document.getElementById("queueFooter").style.display = "block";
+    $("queueFooter").style.display = "block";
     const pct = batchTotal > 0 ? (batchDone / batchTotal) * 100 : 0;
-    document.getElementById("queueProgressBar").style.width = pct + "%";
-    document.getElementById("queueProgressText").textContent =
+    $("queueProgressBar").style.width = pct + "%";
+    $("queueProgressText").textContent =
       `${batchDone} / ${batchTotal}（${pct.toFixed(0)}%）`;
   } else if (batchTotal > 0 && batchDone === batchTotal) {
-    document.getElementById("queueFooter").style.display = "block";
-    document.getElementById("queueProgressBar").style.width = "100%";
-    document.getElementById("queueProgressText").textContent =
+    $("queueFooter").style.display = "block";
+    $("queueProgressBar").style.width = "100%";
+    $("queueProgressText").textContent =
       `已完成 ${batchTotal} 个`;
   }
 }
@@ -821,69 +816,54 @@ function updateQueueItem(idx, patch) {
   renderQueue();
 }
 
-// 单个文件的 payload（批量模式）
-function buildPayloadForFile(inputPath, outputPath) {
-  const mode = document.getElementById("qualityMode").value;
-  const platform = document.getElementById("platform").value;
-  const headTrim = document.getElementById("headTrim").value.trim();
-  const tailTrim = document.getElementById("tailTrim").value.trim();
-
+// 读取当前 UI 的编码参数（overrides 可覆盖平台/格式/质量/码率/preset，用于智能模式）
+function collectEncoderParams(overrides) {
+  const ov = overrides || {};
+  const mode = $("qualityMode").value;
+  const platform = ov.platform || $("platform").value;
+  const autoBitrate = platform !== "copy" && platform !== "smart" && mode === "bitrate";
   return {
-    input: inputPath,
-    output: outputPath,
-    start_time: "",
-    end_time: "",
-    head_trim: headTrim,
-    tail_trim: tailTrim,
     platform: platform,
-    format: document.getElementById("format").value,
-    quality_value: document.getElementById("qualityValue").value,
-    bitrate: (platform !== "copy" && platform !== "smart" && mode === "bitrate")
-      ? document.getElementById("bitrate").value : "",
-    preset: document.getElementById("preset").value,
-    scale: document.getElementById("scale").value,
-    acodec: document.getElementById("acodec").value,
-    abitrate: document.getElementById("abitrate").value,
-    extra: document.getElementById("extra").value,
+    format: ov.format || $("format").value,
+    quality_value: ov.quality_value ?? $("qualityValue").value,
+    bitrate: "bitrate" in ov ? ov.bitrate : (autoBitrate ? $("bitrate").value : ""),
+    preset: ov.preset || $("preset").value,
+    scale: $("scale").value,
+    acodec: $("acodec").value,
+    abitrate: $("abitrate").value,
+    extra: $("extra").value,
   };
 }
 
-// 用指定参数构建 payload（用于智能模式）
-function buildPayloadWithParams(inputPath, outputPath, params) {
-  const headTrim = document.getElementById("headTrim").value.trim();
-  const tailTrim = document.getElementById("tailTrim").value.trim();
-
-  return {
-    input: inputPath,
-    output: outputPath,
-    start_time: "",
-    end_time: "",
-    head_trim: headTrim,
-    tail_trim: tailTrim,
-    platform: params.platform,
-    format: params.format,
-    quality_value: params.quality_value,
-    bitrate: params.bitrate,
-    preset: params.preset,
-    scale: document.getElementById("scale").value,
-    acodec: document.getElementById("acodec").value,
-    abitrate: document.getElementById("abitrate").value,
-    extra: document.getElementById("extra").value,
-  };
+// 构建 /api/transcode 请求体；trim="batch" 用批量裁剪字段，否则用单文件精确剪辑时间
+function buildPayload(inputPath, outputPath, opts) {
+  opts = opts || {};
+  const timing = opts.trim === "batch"
+    ? { start_time: "", end_time: "", head_trim: $("headTrim").value.trim(), tail_trim: $("tailTrim").value.trim() }
+    : { start_time: $("startTime").value, end_time: $("endTime").value, head_trim: "", tail_trim: "" };
+  return Object.assign({ input: inputPath, output: outputPath }, timing, collectEncoderParams(opts.params));
 }
 
-// ==================== 收藏夹 ====================
-function getFavorites() {
-  try { return JSON.parse(localStorage.getItem(FAV_KEY) || "[]"); }
+// ==================== 收藏夹 / 输出目录（localStorage 列表，逻辑共用） ====================
+function lsGet(key) {
+  try { return JSON.parse(localStorage.getItem(key) || "[]"); }
   catch (e) { return []; }
 }
-function saveFavorites(list) { localStorage.setItem(FAV_KEY, JSON.stringify(list)); }
-function renderFavorites() {
-  const list = getFavorites();
-  const el = document.getElementById("favList");
+function lsSave(key, list) { localStorage.setItem(key, JSON.stringify(list)); }
+
+// 取路径最后一段作为显示名（如 "C:\videos" -> "videos"）
+function pathBaseName(p) {
+  const segments = p.split(/[\/\\]/).filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : p;
+}
+
+// 通用收藏列表渲染：点击条目 = onOpen(path)，点 × = onRemove(idx)
+function renderFavList(key, listId, emptyText, onOpen, onRemove) {
+  const list = lsGet(key);
+  const el = $(listId);
   el.innerHTML = "";
   if (list.length === 0) {
-    el.innerHTML = '<span class="fav-empty">点右上 + 收藏当前目录</span>';
+    el.innerHTML = `<span class="fav-empty">${emptyText}</span>`;
     return;
   }
   list.forEach((fav, idx) => {
@@ -895,86 +875,58 @@ function renderFavorites() {
     item.querySelector(".fav-name").textContent = fav.name;
     item.querySelector(".fav-name").onclick = (e) => {
       e.stopPropagation();
-      loadPath(fav.path);
+      onOpen(fav.path);
     };
     item.querySelector(".fav-remove").onclick = (e) => {
       e.stopPropagation();
-      removeFavorite(idx);
+      onRemove(idx);
     };
     el.appendChild(item);
   });
+}
+
+// 去重后追加到列表；已存在时提示并返回 false
+function addToList(key, path, dupMsg) {
+  const list = lsGet(key);
+  if (list.some(f => f.path === path)) { toast(dupMsg, "warn"); return false; }
+  list.push({ name: pathBaseName(path), path });
+  lsSave(key, list);
+  return true;
+}
+
+function removeFromList(key, idx, renderFn) {
+  const list = lsGet(key);
+  list.splice(idx, 1);
+  lsSave(key, list);
+  renderFn();
+}
+
+function renderFavorites() {
+  renderFavList(FAV_KEY, "favList", "点右上 + 收藏当前目录",
+    path => loadPath(path), idx => removeFavorite(idx));
 }
 function addCurrentToFavorites() {
   if (!currentDir) return;
-  const list = getFavorites();
-  if (list.some(f => f.path === currentDir)) { toast("这个目录已经在收藏夹里了", "warn"); return; }
-  const segments = currentDir.split(/[\/\\]/).filter(Boolean);
-  const name = segments.length > 0 ? segments[segments.length - 1] : currentDir;
-  list.push({ name, path: currentDir });
-  saveFavorites(list);
-  renderFavorites();
+  if (addToList(FAV_KEY, currentDir, "这个目录已经在收藏夹里了")) renderFavorites();
 }
-function removeFavorite(idx) {
-  const list = getFavorites();
-  list.splice(idx, 1);
-  saveFavorites(list);
-  renderFavorites();
-}
+function removeFavorite(idx) { removeFromList(FAV_KEY, idx, renderFavorites); }
 
 // ==================== 输出目录收藏 ====================
-function getOutputDirs() {
-  try { return JSON.parse(localStorage.getItem(OUT_DIR_KEY) || "[]"); }
-  catch (e) { return []; }
-}
-function saveOutputDirs(list) { localStorage.setItem(OUT_DIR_KEY, JSON.stringify(list)); }
 function renderOutputDirs() {
-  const list = getOutputDirs();
-  const el = document.getElementById("outputDirList");
-  el.innerHTML = "";
-  if (list.length === 0) {
-    el.innerHTML = '<span class="fav-empty">点右上 + 收藏当前输出目录</span>';
-    return;
-  }
-  list.forEach((fav, idx) => {
-    const item = document.createElement("div");
-    item.className = "fav-item";
-    item.title = fav.path;
-    item.innerHTML = `<span class="fav-name"></span>
-      <button class="fav-remove" title="移除">×</button>`;
-    item.querySelector(".fav-name").textContent = fav.name;
-    item.querySelector(".fav-name").onclick = (e) => {
-      e.stopPropagation();
-      applyOutputDir(fav.path);
-    };
-    item.querySelector(".fav-remove").onclick = (e) => {
-      e.stopPropagation();
-      removeOutputDir(idx);
-    };
-    el.appendChild(item);
-  });
+  renderFavList(OUT_DIR_KEY, "outputDirList", "点右上 + 收藏当前输出目录",
+    path => applyOutputDir(path), idx => removeOutputDir(idx));
 }
 function addCurrentOutputDir() {
-  const outPath = document.getElementById("outputPath").value.trim();
+  const outPath = $("outputPath").value.trim();
   if (!outPath) { toast("输出文件路径为空", "warn"); return; }
   const { dir } = splitPath(outPath);
   if (!dir) { toast("无法解析目录", "warn"); return; }
-  const list = getOutputDirs();
-  if (list.some(f => f.path === dir)) { toast("这个目录已经在输出目录列表里了", "warn"); return; }
-  const segments = dir.split(/[\/\\]/).filter(Boolean);
-  const name = segments.length > 0 ? segments[segments.length - 1] : dir;
-  list.push({ name, path: dir });
-  saveOutputDirs(list);
-  renderOutputDirs();
+  if (addToList(OUT_DIR_KEY, dir, "这个目录已经在输出目录列表里了")) renderOutputDirs();
 }
-function removeOutputDir(idx) {
-  const list = getOutputDirs();
-  list.splice(idx, 1);
-  saveOutputDirs(list);
-  renderOutputDirs();
-}
+function removeOutputDir(idx) { removeFromList(OUT_DIR_KEY, idx, renderOutputDirs); }
 
 function applyOutputDir(newDir) {
-  const inputPath = document.getElementById("inputPath").value.trim();
+  const inputPath = $("inputPath").value.trim();
   if (!inputPath) { toast("请先选择输入文件", "warn"); return; }
 
   const { dir: inputDir, base, ext } = splitPath(inputPath);
@@ -984,7 +936,7 @@ function applyOutputDir(newDir) {
   const suffix = calcSuffix(sameDir);
   const outExt = pickOutputExt(ext);
   const filename = base + suffix + outExt;
-  document.getElementById("outputPath").value = joinPath(newDir, filename);
+  $("outputPath").value = joinPath(newDir, filename);
   outputManuallyEdited = true;
 }
 
@@ -1011,14 +963,14 @@ function parseTime(str) {
 }
 
 // ==================== 播放器 ====================
-const player = document.getElementById("player");
-const videoPlaceholder = document.getElementById("videoPlaceholder");
-const videoArea = document.getElementById("videoArea");
+const player = $("player");
+const videoPlaceholder = $("videoPlaceholder");
+const videoArea = $("videoArea");
 
 player.addEventListener("loadedmetadata", () => {
   videoDuration = player.duration || 0;
   videoPlaceholder.style.display = "none";
-  document.getElementById("endTime").placeholder = formatTime(videoDuration);
+  $("endTime").placeholder = formatTime(videoDuration);
   if (player.videoWidth && player.videoHeight) {
     videoArea.style.aspectRatio = `${player.videoWidth} / ${player.videoHeight}`;
   }
@@ -1032,42 +984,42 @@ player.addEventListener("error", () => {
 
 function setStartFromPlayer() {
   if (!player.src) return;
-  document.getElementById("startTime").value = formatTime(player.currentTime || 0);
+  $("startTime").value = formatTime(player.currentTime || 0);
   onTimeChanged();
 }
 function setEndFromPlayer() {
   if (!player.src) return;
-  document.getElementById("endTime").value = formatTime(player.currentTime || 0);
+  $("endTime").value = formatTime(player.currentTime || 0);
   onTimeChanged();
 }
 
-document.getElementById("startTime").addEventListener("blur", function () {
+$("startTime").addEventListener("blur", function () {
   const v = this.value.trim();
   this.value = v === "" ? "00:00:00" : formatTime(parseTime(v));
   onTimeChanged();
 });
-document.getElementById("endTime").addEventListener("blur", function () {
+$("endTime").addEventListener("blur", function () {
   const v = this.value.trim();
   this.value = v === "" ? "" : formatTime(parseTime(v));
   onTimeChanged();
 });
 ["startTime", "endTime"].forEach(id => {
-  document.getElementById(id).addEventListener("keydown", e => {
+  $(id).addEventListener("keydown", e => {
     if (e.key === "Enter") e.target.blur();
   });
-  document.getElementById(id).addEventListener("input", onTimeChanged);
+  $(id).addEventListener("input", onTimeChanged);
 });
 
 function updateClipUI() {
-  const s = parseTime(document.getElementById("startTime").value);
-  const eRaw = document.getElementById("endTime").value.trim();
+  const s = parseTime($("startTime").value);
+  const eRaw = $("endTime").value.trim();
   const e = eRaw ? parseTime(eRaw) : (videoDuration || 0);
 
-  document.getElementById("clipStartTip").textContent = formatTime(s);
-  document.getElementById("clipEndTip").textContent =
+  $("clipStartTip").textContent = formatTime(s);
+  $("clipEndTip").textContent =
     eRaw ? formatTime(e) : (videoDuration ? formatTime(videoDuration) : "--:--:--");
 
-  const bar = document.getElementById("clipBarActive");
+  const bar = $("clipBarActive");
   if (videoDuration > 0) {
     const leftPct = Math.min(100, Math.max(0, (s / videoDuration) * 100));
     const rightPct = Math.min(100, Math.max(0, 100 - (e / videoDuration) * 100));
@@ -1078,7 +1030,7 @@ function updateClipUI() {
     bar.style.right = "0%";
   }
 
-  const hint = document.getElementById("durationHint");
+  const hint = $("durationHint");
   let dur = 0;
   if (e > s) dur = e - s;
   else if (videoDuration > 0) dur = videoDuration - s;
@@ -1096,9 +1048,9 @@ async function loadPath(path) {
     if (d.error) { toast(d.error, "error"); return; }
     currentDir = d.path;
     browseMode = "browse";
-    document.getElementById("pathInput").value = d.path;
+    $("pathInput").value = d.path;
 
-    const ul = document.getElementById("filelist");
+    const ul = $("filelist");
     ul.innerHTML = "";
 
     if (d.parent) {
@@ -1186,7 +1138,7 @@ function getCheckRows() {
 
 function updateSelCount() {
   const checked = document.querySelectorAll("#filelist .chk:checked").length;
-  const btn = document.getElementById("addSelBtn");
+  const btn = $("addSelBtn");
   if (btn) {
     btn.textContent = `加入所选 (${checked})`;
     btn.disabled = checked === 0;
@@ -1235,7 +1187,7 @@ function clearSelection() {
 
 // 按后缀重建筛选下拉（保留仍可用的当前选择）
 function rebuildExtFilter() {
-  const sel = document.getElementById("extFilter");
+  const sel = $("extFilter");
   if (!sel) return;
   const prev = sel.value;
   const exts = [...new Set(Array.from(document.querySelectorAll("#filelist li[data-ext]"))
@@ -1248,7 +1200,7 @@ function rebuildExtFilter() {
 
 // 应用筛选：隐藏不匹配的视频文件（文件夹与「..」不受影响）
 function applyExtFilter() {
-  const sel = document.getElementById("extFilter");
+  const sel = $("extFilter");
   const val = sel ? sel.value : "";
   let total = 0, shown = 0;
   document.querySelectorAll("#filelist li[data-ext]").forEach(li => {
@@ -1257,7 +1209,7 @@ function applyExtFilter() {
     li.style.display = ok ? "" : "none";
     if (ok) shown++;
   });
-  const ul = document.getElementById("filelist");
+  const ul = $("filelist");
   const hint = ul.querySelector("li.filter-empty");
   if (total > 0 && shown === 0 && val) {
     if (!hint) {
@@ -1304,10 +1256,19 @@ function isWindowsDriveRoot(path) {
   return /^[A-Za-z]:[\\/]*$/.test(path || "");
 }
 
+// 选择器列表项：显示名字，点击进入对应目录（子目录列表与盘符列表共用）
+function appendPickerItem(listEl, name, path) {
+  const li = document.createElement("li");
+  li.innerHTML = '<span class="name"></span>';
+  li.querySelector(".name").textContent = name;
+  li.onclick = () => loadPickerDir(path);
+  listEl.appendChild(li);
+}
+
 // 按最后一次成功加载的位置，恢复「上级 / 选择此文件夹」可用状态
 function syncPickerButtons() {
-  const upBtn = document.getElementById("folderUpBtn");
-  const okBtn = document.getElementById("folderConfirmBtn");
+  const upBtn = $("folderUpBtn");
+  const okBtn = $("folderConfirmBtn");
   if (upBtn) upBtn.disabled = !(pickerParent || isWindowsDriveRoot(pickerDir));
   if (okBtn) okBtn.disabled = !pickerDir;
 }
@@ -1316,23 +1277,23 @@ async function openFolderPicker() {
   // 打开时先复位：加载完成前「上级/确认」不可点，避免点了没反应
   pickerDir = "";
   pickerParent = null;
-  const upBtn = document.getElementById("folderUpBtn");
-  const okBtn = document.getElementById("folderConfirmBtn");
+  const upBtn = $("folderUpBtn");
+  const okBtn = $("folderConfirmBtn");
   if (upBtn) upBtn.disabled = true;
   if (okBtn) okBtn.disabled = true;
-  document.getElementById("folderModal").style.display = "flex";
+  $("folderModal").style.display = "flex";
   await loadPickerDir(currentDir || window.MEDIA_DIR);
 }
 
 function closeFolderPicker() {
-  document.getElementById("folderModal").style.display = "none";
+  $("folderModal").style.display = "none";
 }
 
 async function loadPickerDir(path) {
-  const pathEl = document.getElementById("folderModalPath");
-  const listEl = document.getElementById("folderModalList");
-  const upBtn = document.getElementById("folderUpBtn");
-  const okBtn = document.getElementById("folderConfirmBtn");
+  const pathEl = $("folderModalPath");
+  const listEl = $("folderModalList");
+  const upBtn = $("folderUpBtn");
+  const okBtn = $("folderConfirmBtn");
   const seq = ++pickerSeq;
   if (upBtn) upBtn.disabled = true;   // 加载中禁点，避免「上级」点了没反应
   if (okBtn) okBtn.disabled = true;
@@ -1359,13 +1320,7 @@ async function loadPickerDir(path) {
       listEl.innerHTML = '<li class="empty">（没有子文件夹）</li>';
       return;
     }
-    dirs.forEach(it => {
-      const li = document.createElement("li");
-      li.innerHTML = '<span class="name"></span>';
-      li.querySelector(".name").textContent = it.name;
-      li.onclick = () => loadPickerDir(it.path);
-      listEl.appendChild(li);
-    });
+    dirs.forEach(it => appendPickerItem(listEl, it.name, it.path));
   } catch (e) {
     if (seq !== pickerSeq) return;
     toast("加载失败: " + e, "error");
@@ -1375,10 +1330,10 @@ async function loadPickerDir(path) {
 
 // 「此电脑」视图：列出所有盘符（Windows）/ 根目录
 async function showPickerDrives() {
-  const pathEl = document.getElementById("folderModalPath");
-  const listEl = document.getElementById("folderModalList");
-  const upBtn = document.getElementById("folderUpBtn");
-  const okBtn = document.getElementById("folderConfirmBtn");
+  const pathEl = $("folderModalPath");
+  const listEl = $("folderModalList");
+  const upBtn = $("folderUpBtn");
+  const okBtn = $("folderConfirmBtn");
   const seq = ++pickerSeq;
   pickerDir = "";
   pickerParent = null;
@@ -1397,13 +1352,7 @@ async function showPickerDrives() {
       listEl.innerHTML = '<li class="empty">（没有可用盘符）</li>';
       return;
     }
-    items.forEach(it => {
-      const li = document.createElement("li");
-      li.innerHTML = '<span class="name"></span>';
-      li.querySelector(".name").textContent = it.name;
-      li.onclick = () => loadPickerDir(it.path);
-      listEl.appendChild(li);
-    });
+    items.forEach(it => appendPickerItem(listEl, it.name, it.path));
   } catch (e) {
     if (seq === pickerSeq) toast("加载失败: " + e, "error");
   }
@@ -1426,8 +1375,8 @@ function confirmFolderPicker() {
 // ==================== 探查（递归扫描视频文件） ====================
 async function scanCurrentDir() {
   const dir = currentDir;
-  const btn = document.getElementById("scanBtn");
-  const ul = document.getElementById("filelist");
+  const btn = $("scanBtn");
+  const ul = $("filelist");
   const seq = ++viewSeq;   // 与 loadPath 共用导航序号
   btn.disabled = true;
   btn.textContent = "探查中…";
@@ -1460,7 +1409,7 @@ async function scanCurrentDir() {
 }
 
 function renderScanResult(d) {
-  const ul = document.getElementById("filelist");
+  const ul = $("filelist");
   ul.innerHTML = "";
 
   const back = document.createElement("li");
@@ -1496,7 +1445,7 @@ function refreshView() {
 }
 
 async function previewFile(path) {
-  document.getElementById("inputPath").value = path;
+  $("inputPath").value = path;
   outputManuallyEdited = false;
   updateOutputPath();
 
@@ -1509,7 +1458,7 @@ async function previewFile(path) {
   const r = await fetch("/api/info?path=" + encodeURIComponent(path));
   const d = await r.json();
   currentSrcInfo = d;
-  const box = document.getElementById("infoBox");
+  const box = $("infoBox");
 
   if (d.error) {
     box.style.display = "block";
@@ -1517,7 +1466,7 @@ async function previewFile(path) {
       <span style="color:#ccc">${d.error}</span>`;
     // 清掉上一个文件的智能推荐，避免误导
     lastRecommendation = null;
-    document.getElementById("recommendBox").style.display = "none";
+    $("recommendBox").style.display = "none";
     return;
   }
 
@@ -1541,8 +1490,8 @@ async function previewFile(path) {
 
 async function selectFile(path) {
   await previewFile(path);
-  document.getElementById("startTime").value = "00:00:00";
-  document.getElementById("endTime").value = "";
+  $("startTime").value = "00:00:00";
+  $("endTime").value = "";
   videoDuration = 0;
   updateClipUI();
   outputManuallyEdited = false;
@@ -1571,12 +1520,15 @@ async function postTranscode(payload) {
   return await r.json();
 }
 
+// 轮询任务直到结束（网络抖动重试几次，避免误判失败）
 function waitForTask(taskId) {
   return new Promise((resolve) => {
+    let errors = 0;
     const check = async () => {
       try {
         const r = await fetch("/api/task/" + taskId);
         const t = await r.json();
+        errors = 0;
         if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
           resolve(t);
         } else {
@@ -1584,7 +1536,8 @@ function waitForTask(taskId) {
           setTimeout(check, 800);
         }
       } catch (e) {
-        resolve({ status: "failed", error: String(e) });
+        if (++errors >= 5) resolve({ status: "failed", error: String(e) });
+        else setTimeout(check, 800);
       }
     };
     check();
@@ -1600,66 +1553,33 @@ async function submitTask() {
 }
 
 async function runSingle() {
-  const platform = document.getElementById("platform").value;
-  const mode = document.getElementById("qualityMode").value;
+  const platform = $("platform").value;
+  const inputPath = $("inputPath").value;
+  const outputPath = $("outputPath").value;
 
   let payload;
 
   if (platform === "smart") {
-    // 智能模式：用缓存的源信息
+    // 智能模式：优先用缓存的源信息，没有就现取一次
     let srcInfo = currentSrcInfo;
     if (!srcInfo) {
-      const inputPath = document.getElementById("inputPath").value;
       if (!inputPath) { toast("请先选择输入文件", "warn"); return; }
       const r = await fetch("/api/info?path=" + encodeURIComponent(inputPath));
       srcInfo = await r.json();
     }
-    const params = resolveSmartParams(srcInfo);
-    payload = {
-      input: document.getElementById("inputPath").value,
-      output: document.getElementById("outputPath").value,
-      start_time: document.getElementById("startTime").value,
-      end_time: document.getElementById("endTime").value,
-      head_trim: "",
-      tail_trim: "",
-      platform: params.platform,
-      format: params.format,
-      quality_value: params.quality_value,
-      bitrate: params.bitrate,
-      preset: params.preset,
-      scale: document.getElementById("scale").value,
-      acodec: document.getElementById("acodec").value,
-      abitrate: document.getElementById("abitrate").value,
-      extra: document.getElementById("extra").value,
-    };
+    payload = buildPayload(inputPath, outputPath, { params: resolveSmartParams(srcInfo) });
   } else {
-    payload = {
-      input: document.getElementById("inputPath").value,
-      output: document.getElementById("outputPath").value,
-      start_time: document.getElementById("startTime").value,
-      end_time: document.getElementById("endTime").value,
-      head_trim: "",
-      tail_trim: "",
-      platform: platform,
-      format: document.getElementById("format").value,
-      quality_value: document.getElementById("qualityValue").value,
-      bitrate: (platform !== "copy" && mode === "bitrate") ? document.getElementById("bitrate").value : "",
-      preset: document.getElementById("preset").value,
-      scale: document.getElementById("scale").value,
-      acodec: document.getElementById("acodec").value,
-      abitrate: document.getElementById("abitrate").value,
-      extra: document.getElementById("extra").value,
-    };
+    payload = buildPayload(inputPath, outputPath);
   }
 
   if (!payload.input) { toast("请先选择输入文件", "warn"); return; }
   if (!payload.output) { toast("请填写输出文件路径", "warn"); return; }
 
-  const btn = document.getElementById("submitBtn");
-  const stopBtn = document.getElementById("stopBtn");
+  const btn = $("submitBtn");
+  const stopBtn = $("stopBtn");
   btn.disabled = true;
   btn.textContent = "提交中…";
-  document.getElementById("openDirBtn").style.display = "none";
+  $("openDirBtn").style.display = "none";
 
   try {
     const d = await postTranscode(payload);
@@ -1670,20 +1590,49 @@ async function runSingle() {
       return;
     }
     currentTaskId = d.task_id;
-    document.getElementById("progressWrap").style.display = "block";
-    document.getElementById("logBox").style.display = "block";
-    document.getElementById("logBox").textContent = "$ " + (d.cmd || "");
+    $("progressWrap").style.display = "block";
+    $("logBox").style.display = "block";
+    $("logBox").textContent = "$ " + (d.cmd || "");
     if (d.audio_note) {
-      document.getElementById("logBox").textContent += "\n\n[提示] " + d.audio_note;
+      $("logBox").textContent += "\n\n[提示] " + d.audio_note;
     }
     stopBtn.style.display = "inline-block";
     stopBtn.disabled = false;
     btn.textContent = "运行中…";
-    startPolling();
+
+    // 轮询到任务结束，统一切换到完成 / 中止 / 失败收尾
+    const t = await waitForTask(d.task_id);
+    currentTaskId = null;
+    finishSingleTask(t);
   } catch (e) {
     toast("提交失败: " + e, "error");
     btn.disabled = false;
     btn.textContent = "开始转码";
+  }
+}
+
+// 单任务结束后的界面收尾
+function finishSingleTask(t) {
+  const btn = $("submitBtn");
+  const stopBtn = $("stopBtn");
+  updateProgressUI(t);
+  btn.disabled = false;
+  stopBtn.disabled = false;
+  stopBtn.style.display = "none";
+  stopBtn.textContent = "中止";
+
+  if (t.status === "completed") {
+    btn.textContent = "✅ 完成，再来一次";
+    refreshView();  // 刷新当前视图（含探查结果），显示新生成的文件
+    $("openDirBtn").style.display = "inline-block";
+  } else if (t.status === "cancelled") {
+    btn.textContent = "🚫 已中止，重新开始";
+  } else {
+    btn.textContent = "❌ 失败，重试";
+    toast("任务失败：" + (t.error || "未知错误"), "error");
+  }
+  if (t.error) {
+    $("logBox").textContent += "\n\n[提示] " + t.error;
   }
 }
 
@@ -1702,26 +1651,37 @@ async function runBatch() {
   });
   renderQueue();
 
-  const btn = document.getElementById("submitBtn");
-  const stopBtn = document.getElementById("stopBtn");
+  const btn = $("submitBtn");
+  const stopBtn = $("stopBtn");
   btn.disabled = true;
   stopBtn.style.display = "inline-block";
   stopBtn.disabled = false;
-  document.getElementById("progressWrap").style.display = "block";
-  document.getElementById("logBox").style.display = "block";
-  document.getElementById("openDirBtn").style.display = "none";
+  $("progressWrap").style.display = "block";
+  $("logBox").style.display = "block";
+  $("openDirBtn").style.display = "none";
 
-  const platform = document.getElementById("platform").value;
+  const platform = $("platform").value;
   let successCount = 0;
   let failedCount = 0;
 
+  // 单个文件失败收尾：计数 + 更新队列状态
+  const markFailed = (i, msg) => {
+    failedCount++;
+    batchDone++;
+    updateQueueItem(i, { status: "failed", error: msg });
+  };
+
   for (let i = 0; i < batchQueue.length; i++) {
     if (batchCancelled) {
+      // 剩余的排队项直接标记中止，最后统一刷新一次
+      let marked = false;
       for (let j = i; j < batchQueue.length; j++) {
         if (batchQueue[j].status === "pending") {
-          updateQueueItem(j, { status: "cancelled" });
+          batchQueue[j].status = "cancelled";
+          marked = true;
         }
       }
+      if (marked) renderQueue();
       break;
     }
 
@@ -1735,41 +1695,32 @@ async function runBatch() {
     if (platform === "smart") {
       // 智能模式：每个文件单独分析
       try {
-        document.getElementById("logBox").textContent =
+        $("logBox").textContent =
           `[${i + 1}/${batchQueue.length}] ${item.name}\n⏳ 正在分析源文件…`;
         const ir = await fetch("/api/info?path=" + encodeURIComponent(item.path));
         const srcInfo = await ir.json();
         if (srcInfo.error) {
-          updateQueueItem(i, { status: "failed", error: "读取源信息失败" });
-          failedCount++;
-          batchDone++;
-          renderQueue();
+          markFailed(i, "读取源信息失败");
           continue;
         }
         const params = resolveSmartParams(srcInfo);
-        payload = buildPayloadWithParams(item.path, outPath, params);
-        document.getElementById("logBox").textContent =
+        payload = buildPayload(item.path, outPath, { trim: "batch", params });
+        $("logBox").textContent =
           `[${i + 1}/${batchQueue.length}] ${item.name}\n` +
           `🧠 智能选择：${params.platform} / ${params.format} / ` +
           `q=${params.quality_value}${params.bitrate ? " / " + params.bitrate : ""} / ${params.preset}`;
       } catch (e) {
-        updateQueueItem(i, { status: "failed", error: "分析失败: " + e });
-        failedCount++;
-        batchDone++;
-        renderQueue();
+        markFailed(i, "分析失败: " + e);
         continue;
       }
     } else {
-      payload = buildPayloadForFile(item.path, outPath);
+      payload = buildPayload(item.path, outPath, { trim: "batch" });
     }
 
     try {
       const d = await postTranscode(payload);
       if (d.error) {
-        updateQueueItem(i, { status: "failed", error: d.error });
-        failedCount++;
-        batchDone++;
-        renderQueue();
+        markFailed(i, d.error);
         continue;
       }
 
@@ -1777,30 +1728,26 @@ async function runBatch() {
       updateQueueItem(i, { taskId: d.task_id });
 
       if (platform !== "smart") {
-        document.getElementById("logBox").textContent =
+        $("logBox").textContent =
           `[${i + 1}/${batchQueue.length}] ${item.name}\n$ ${d.cmd || ""}` +
           (d.audio_note ? `\n\n[提示] ${d.audio_note}` : "");
       } else if (d.audio_note) {
-        document.getElementById("logBox").textContent += `\n\n[提示] ${d.audio_note}`;
+        $("logBox").textContent += `\n\n[提示] ${d.audio_note}`;
       }
 
       const result = await waitForTask(d.task_id);
+      batchDone++;
       if (result.status === "completed") {
-        updateQueueItem(i, { status: "completed" });
         successCount++;
+        updateQueueItem(i, { status: "completed" });
       } else if (result.status === "cancelled") {
         updateQueueItem(i, { status: "cancelled" });
       } else {
-        updateQueueItem(i, { status: "failed", error: result.error || "" });
         failedCount++;
+        updateQueueItem(i, { status: "failed", error: result.error || "" });
       }
-      batchDone++;
-      renderQueue();
     } catch (e) {
-      updateQueueItem(i, { status: "failed", error: String(e) });
-      failedCount++;
-      batchDone++;
-      renderQueue();
+      markFailed(i, String(e));
     }
   }
 
@@ -1815,7 +1762,7 @@ async function runBatch() {
   // 刷新文件列表（显示新生成的文件），并提供打开输出目录入口
   refreshView();
   if (successCount > 0) {
-    document.getElementById("openDirBtn").style.display = "inline-block";
+    $("openDirBtn").style.display = "inline-block";
   }
   toast(`批量完成：成功 ${successCount} / 失败 ${failedCount}`,
         failedCount > 0 ? "warn" : "ok");
@@ -1823,7 +1770,7 @@ async function runBatch() {
 
 async function stopTask() {
   if (!currentTaskId && !isBatchRunning) return;
-  const stopBtn = document.getElementById("stopBtn");
+  const stopBtn = $("stopBtn");
   const msg = isBatchRunning ? "确定要中止批量任务吗？" : "确定要中止当前任务吗？";
   if (!confirm(msg + "已生成的部分文件会被保留。")) return;
 
@@ -1843,43 +1790,9 @@ async function stopTask() {
   }
 }
 
-function startPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(async () => {
-    if (!currentTaskId) return;
-    const r = await fetch("/api/task/" + currentTaskId);
-    const t = await r.json();
-    updateProgressUI(t);
-
-    if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
-      clearInterval(pollTimer);
-      const btn = document.getElementById("submitBtn");
-      const stopBtn = document.getElementById("stopBtn");
-      btn.disabled = false;
-      stopBtn.style.display = "none";
-      stopBtn.textContent = "中止";
-
-      if (t.status === "completed") {
-        btn.textContent = "✅ 完成，再来一次";
-        refreshView();  // 刷新当前视图（含探查结果），显示新生成的文件
-        document.getElementById("openDirBtn").style.display = "inline-block";
-      } else if (t.status === "cancelled") {
-        btn.textContent = "🚫 已中止，重新开始";
-      } else {
-        btn.textContent = "❌ 失败，重试";
-        toast("任务失败：" + (t.error || "未知错误"), "error");
-      }
-
-      if (t.error) {
-        document.getElementById("logBox").textContent += "\n\n[提示] " + t.error;
-      }
-    }
-  }, 800);
-}
-
 // 打开当前输出文件所在目录（在左侧文件浏览器中定位）
 function openOutputDir() {
-  const out = document.getElementById("outputPath").value.trim();
+  const out = $("outputPath").value.trim();
   if (!out) { toast("还没有输出路径", "warn"); return; }
   const { dir } = splitPath(out);
   if (dir) loadPath(dir);
@@ -1894,11 +1807,11 @@ renderOutputDirs();
 renderQueue();
 
 // 文件夹选择弹窗：点击遮罩 / 按 Esc 关闭
-document.getElementById("folderModal").addEventListener("click", (e) => {
+$("folderModal").addEventListener("click", (e) => {
   if (e.target.id === "folderModal") closeFolderPicker();
 });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.getElementById("folderModal").style.display !== "none") {
+  if (e.key === "Escape" && $("folderModal").style.display !== "none") {
     closeFolderPicker();
   }
 });
