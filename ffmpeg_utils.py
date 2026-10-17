@@ -11,7 +11,7 @@ import subprocess
 
 from config import (CONTAINER_AUDIO_CODECS, CONTAINER_FALLBACK_ACODEC,
                     CONTAINER_VIDEO_CODECS, FFMPEG, FFPROBE, IS_LINUX,
-                    VAAPI_DEVICE)
+                    VAAPI_DEVICE, VIDEO_EXTS)
 
 
 def output_ext(path):
@@ -106,6 +106,47 @@ def human_size(n):
             return f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} PB"
+
+
+def scan_videos(root, max_files=2000, max_dirs=20000):
+    """
+    递归扫描 root 下所有视频文件（跳过隐藏文件 / 隐藏目录）。
+    返回 (items, truncated)；items 按相对路径排序，字段：
+        name（文件名）/ path（绝对路径）/ rel（相对 root 的路径）/ size / size_human
+    """
+    items = []
+    truncated = False
+    visited = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        visited += 1
+        if visited > max_dirs:
+            truncated = True
+            break
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fn in filenames:
+            if fn.startswith("."):
+                continue
+            if os.path.splitext(fn)[1].lower() not in VIDEO_EXTS:
+                continue
+            full = os.path.join(dirpath, fn)
+            try:
+                size = os.path.getsize(full)
+            except OSError:
+                size = 0
+            items.append({
+                "name": fn,
+                "path": full,
+                "rel": os.path.relpath(full, root),
+                "size": size,
+                "size_human": human_size(size) if size else "",
+            })
+            if len(items) >= max_files:
+                truncated = True
+                break
+        if truncated:
+            break
+    items.sort(key=lambda it: it["rel"].lower())
+    return items, truncated
 
 
 def get_source_audio_codec(src_info):

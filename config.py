@@ -48,6 +48,10 @@ except ValueError:
 # 任务记录最多保留条数（防止长时间运行后内存持续增长）
 MAX_TASKS_KEPT = 200
 
+# /api/scan 递归探查的保护上限（防止在超大目录树上失控）
+SCAN_MAX_FILES = 2000
+SCAN_MAX_DIRS = 20000
+
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm",
               ".ts", ".m2ts", ".mpg", ".mpeg", ".vob", ".m4v", ".3gp", ".rmvb"}
 

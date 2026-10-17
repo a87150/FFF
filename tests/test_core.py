@@ -1,8 +1,10 @@
 """
-纯逻辑单元测试：时间/速度解析、容器兼容检查、编码器参数生成、进度换算。
+纯逻辑单元测试：时间/速度解析、容器兼容检查、编码器参数生成、进度换算、目录探查。
 
 这些测试不依赖 FFmpeg 二进制，可在任意机器上运行。
 """
+
+import os
 
 import pytest
 
@@ -165,3 +167,38 @@ class TestProgressMath:
         assert fu.compute_eta(2, 10, 2.0) == pytest.approx(4.0)
         assert fu.compute_eta(11, 10, 2.0) == 0.0
         assert fu.compute_eta(2, 10, 0) is None
+
+
+class TestScanVideos:
+    def _make_tree(self, tmp_path):
+        (tmp_path / "sub" / "deep").mkdir(parents=True)
+        (tmp_path / ".hidden").mkdir()
+        (tmp_path / "a.mp4").write_bytes(b"x")
+        (tmp_path / "b.txt").write_bytes(b"x")
+        (tmp_path / "sub" / "c.mkv").write_bytes(b"x")
+        (tmp_path / "sub" / "deep" / "d.mov").write_bytes(b"x")
+        (tmp_path / ".hidden" / "e.mp4").write_bytes(b"x")
+        (tmp_path / ".dotfile.mp4").write_bytes(b"x")
+
+    def _rels(self, items):
+        return [it["rel"].replace("\\", "/") for it in items]
+
+    def test_recursive_and_sorted(self, tmp_path):
+        self._make_tree(tmp_path)
+        items, truncated = fu.scan_videos(str(tmp_path))
+        assert self._rels(items) == ["a.mp4", "sub/c.mkv", "sub/deep/d.mov"]
+        assert truncated is False
+        assert all(os.path.isabs(it["path"]) for it in items)
+        assert all(it["name"] in it["rel"] for it in items)
+        assert items[0]["size"] == 1 and items[0]["size_human"]
+
+    def test_max_files_truncates(self, tmp_path):
+        for i in range(5):
+            (tmp_path / f"v{i}.mp4").write_bytes(b"x")
+        items, truncated = fu.scan_videos(str(tmp_path), max_files=3)
+        assert len(items) == 3
+        assert truncated is True
+
+    def test_empty_dir(self, tmp_path):
+        items, truncated = fu.scan_videos(str(tmp_path))
+        assert items == [] and truncated is False

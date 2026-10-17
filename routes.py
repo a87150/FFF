@@ -11,11 +11,12 @@ import time
 from flask import Blueprint, jsonify, render_template, request, send_file
 
 from config import (BITRATE_RE, DEFAULT_PRESETS, FASTSTART_EXTS, FFMPEG,
-                    IS_LINUX, MEDIA_DIR, SCALE_RE, VALID_PRESETS,
-                    VAAPI_DEVICE, VIDEO_EXTS)
+                    IS_LINUX, MEDIA_DIR, SCALE_RE, SCAN_MAX_DIRS,
+                    SCAN_MAX_FILES, VALID_PRESETS, VAAPI_DEVICE, VIDEO_EXTS)
 from ffmpeg_utils import (build_encoder, check_copy_video_compat,
                           ensure_audio_compatible, get_video_info, human_size,
-                          output_ext, parse_time, run_subprocess, same_file)
+                          output_ext, parse_time, run_subprocess, same_file,
+                          scan_videos)
 from tasks import manager
 
 bp = Blueprint("main", __name__)
@@ -65,6 +66,21 @@ def browse():
         return jsonify({"error": "没有权限访问该目录"}), 403
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/api/scan")
+def scan():
+    """递归探查目录下所有视频文件（跳过隐藏目录），供前端"探查"功能使用"""
+    path = request.args.get("path") or MEDIA_DIR
+    path = os.path.abspath(os.path.expanduser(path))
+
+    if not os.path.exists(path):
+        return jsonify({"error": f"路径不存在: {path}"}), 404
+    if not os.path.isdir(path):
+        return jsonify({"error": "不是目录"}), 400
+
+    items, truncated = scan_videos(path, max_files=SCAN_MAX_FILES, max_dirs=SCAN_MAX_DIRS)
+    return jsonify({"path": path, "count": len(items), "truncated": truncated, "items": items})
 
 
 @bp.route("/api/info")

@@ -8,6 +8,7 @@ let pollTimer = null;
 let outputManuallyEdited = false;
 let lastRecommendation = null;
 let currentSrcInfo = null;
+let browseMode = "browse";   // "browse"（目录浏览）| "scan"（探查结果）
 
 let batchQueue = [];
 let isBatchRunning = false;
@@ -1090,6 +1091,7 @@ async function loadPath(path) {
     const d = await r.json();
     if (d.error) { toast(d.error, "error"); return; }
     currentDir = d.path;
+    browseMode = "browse";
     document.getElementById("pathInput").value = d.path;
 
     const ul = document.getElementById("filelist");
@@ -1108,47 +1110,187 @@ async function loadPath(path) {
     }
 
     d.items.forEach(item => {
-      const li = document.createElement("li");
-      li.dataset.path = item.path;
-      const icon = item.is_dir ? "📁" : "🎞️";
-      const size = item.size_human ? `<span class="size">${item.size_human}</span>` : "";
-
       if (item.is_dir) {
-        li.innerHTML = `<span class="icon">${icon}</span><span class="name"></span>${size}`;
+        const li = document.createElement("li");
+        li.dataset.path = item.path;
+        const size = item.size_human ? `<span class="size">${item.size_human}</span>` : "";
+        li.innerHTML = `<span class="icon">📁</span><span class="name"></span>${size}`;
         li.querySelector(".name").textContent = item.name;
         li.onclick = () => loadPath(item.path);
+        ul.appendChild(li);
       } else {
-        const inQueue = batchQueue.some(q => q.path === item.path);
-        li.innerHTML = `
-          <span class="icon">${icon}</span>
-          <span class="name"></span>
-          ${size}
-          <button class="add-btn${inQueue ? ' added' : ''}" title="${inQueue ? '已在队列' : '加入队列'}">${inQueue ? '✓' : '+'}</button>
-        `;
-        li.querySelector(".name").textContent = item.name;
-
-        const addBtn = li.querySelector(".add-btn");
-        addBtn.onclick = (e) => {
-          e.stopPropagation();
-          if (batchQueue.some(q => q.path === item.path)) return;
-          addToQueue(item.path, item.name);
-          addBtn.classList.add("added");
-          addBtn.textContent = "✓";
-          addBtn.title = "已在队列";
-        };
-
-        li.onclick = (e) => {
-          if (e.target.classList.contains("add-btn")) return;
-          document.querySelectorAll("#filelist li").forEach(x => x.classList.remove("selected"));
-          li.classList.add("selected");
-          selectFile(item.path);
-        };
+        // 普通浏览不标注相对路径
+        ul.appendChild(buildVideoLi(item, ""));
       }
-      ul.appendChild(li);
     });
   } catch (e) {
     toast("加载失败: " + e, "error");
   }
+}
+
+// 构建视频文件行（目录浏览 / 探查结果共用）；relLabel 非空时在文件名后标注相对路径
+function buildVideoLi(item, relLabel) {
+  const li = document.createElement("li");
+  li.dataset.path = item.path;
+  const inQueue = batchQueue.some(q => q.path === item.path);
+  li.innerHTML = `
+    <span class="icon">🎞️</span>
+    <span class="name"></span>
+    ${relLabel ? '<span class="relpath"></span>' : ""}
+    <span class="size">${item.size_human || ""}</span>
+    <button class="add-btn${inQueue ? " added" : ""}" title="${inQueue ? "已在队列" : "加入队列"}">${inQueue ? "✓" : "+"}</button>
+  `;
+  li.querySelector(".name").textContent = item.name;
+  li.querySelector(".name").title = item.path;
+  if (relLabel) {
+    const rp = li.querySelector(".relpath");
+    rp.textContent = relLabel;
+    rp.title = item.path;
+  }
+
+  const addBtn = li.querySelector(".add-btn");
+  addBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (batchQueue.some(q => q.path === item.path)) return;
+    addToQueue(item.path, item.name);
+    addBtn.classList.add("added");
+    addBtn.textContent = "✓";
+    addBtn.title = "已在队列";
+  };
+
+  li.onclick = (e) => {
+    if (e.target.classList.contains("add-btn")) return;
+    document.querySelectorAll("#filelist li").forEach(x => x.classList.remove("selected"));
+    li.classList.add("selected");
+    selectFile(item.path);
+  };
+  return li;
+}
+
+// ==================== 文件夹选择弹窗 ====================
+let pickerDir = "";
+let pickerParent = null;
+
+async function openFolderPicker() {
+  document.getElementById("folderModal").style.display = "flex";
+  await loadPickerDir(currentDir || window.MEDIA_DIR);
+}
+
+function closeFolderPicker() {
+  document.getElementById("folderModal").style.display = "none";
+}
+
+async function loadPickerDir(path) {
+  const pathEl = document.getElementById("folderModalPath");
+  const listEl = document.getElementById("folderModalList");
+  const upBtn = document.getElementById("folderUpBtn");
+  listEl.innerHTML = '<li class="empty">加载中…</li>';
+  try {
+    const r = await fetch("/api/browse?path=" + encodeURIComponent(path));
+    const d = await r.json();
+    if (d.error) {
+      toast(d.error, "error");
+      listEl.innerHTML = '<li class="empty">加载失败</li>';
+      return;
+    }
+    pickerDir = d.path;
+    pickerParent = d.parent;
+    pathEl.textContent = d.path;
+    pathEl.title = d.path;
+    upBtn.disabled = !d.parent;
+
+    listEl.innerHTML = "";
+    const dirs = d.items.filter(it => it.is_dir);
+    if (dirs.length === 0) {
+      listEl.innerHTML = '<li class="empty">（没有子文件夹）</li>';
+      return;
+    }
+    dirs.forEach(it => {
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="icon">📁</span><span class="name"></span>';
+      li.querySelector(".name").textContent = it.name;
+      li.onclick = () => loadPickerDir(it.path);
+      listEl.appendChild(li);
+    });
+  } catch (e) {
+    toast("加载失败: " + e, "error");
+  }
+}
+
+function pickerGoUp() {
+  if (pickerParent) loadPickerDir(pickerParent);
+}
+
+function confirmFolderPicker() {
+  if (!pickerDir) return;
+  closeFolderPicker();
+  loadPath(pickerDir);
+}
+
+// ==================== 探查（递归扫描视频文件） ====================
+async function scanCurrentDir() {
+  const dir = currentDir;
+  const btn = document.getElementById("scanBtn");
+  const ul = document.getElementById("filelist");
+  btn.disabled = true;
+  btn.textContent = "⏳ 探查中";
+  ul.innerHTML = "";
+  const loading = document.createElement("li");
+  loading.className = "empty";
+  loading.textContent = "⏳ 正在探查 " + dir + " …";
+  ul.appendChild(loading);
+
+  try {
+    const r = await fetch("/api/scan?path=" + encodeURIComponent(dir));
+    const d = await r.json();
+    if (d.error) {
+      toast(d.error, "error");
+      loadPath(dir);
+      return;
+    }
+    browseMode = "scan";
+    renderScanResult(d);
+  } catch (e) {
+    toast("探查失败: " + e, "error");
+    loadPath(dir);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🔍 探查";
+  }
+}
+
+function renderScanResult(d) {
+  const ul = document.getElementById("filelist");
+  ul.innerHTML = "";
+
+  const back = document.createElement("li");
+  back.className = "up";
+  back.title = "返回普通目录浏览";
+  back.innerHTML = '<span class="icon">🔍</span><span class="name"></span>';
+  back.querySelector(".name").textContent =
+    `返回浏览（探查到 ${d.count} 个视频${d.truncated ? "，已达上限截断" : ""}）`;
+  back.onclick = () => loadPath(currentDir);
+  ul.appendChild(back);
+
+  if (!d.items || d.items.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "（没有找到视频文件）";
+    ul.appendChild(empty);
+    return;
+  }
+
+  // 子目录中的文件在文件名后标注相对路径（位于探查根目录的文件不重复标注）
+  d.items.forEach(item => {
+    const rel = (item.rel && item.rel !== item.name) ? item.rel : "";
+    ul.appendChild(buildVideoLi(item, rel));
+  });
+}
+
+// 任务完成后按当前视图刷新（普通浏览 / 探查结果）
+function refreshView() {
+  if (browseMode === "scan") scanCurrentDir();
+  else loadPath(currentDir);
 }
 
 async function previewFile(path) {
@@ -1469,7 +1611,7 @@ async function runBatch() {
   renderQueue();
 
   // 刷新文件列表（显示新生成的文件），并提供打开输出目录入口
-  loadPath(currentDir);
+  refreshView();
   if (successCount > 0) {
     document.getElementById("openDirBtn").style.display = "inline-block";
   }
@@ -1517,7 +1659,7 @@ function startPolling() {
 
       if (t.status === "completed") {
         btn.textContent = "✅ 完成，再来一次";
-        loadPath(currentDir);  // 刷新列表，显示新生成的文件
+        refreshView();  // 刷新当前视图（含探查结果），显示新生成的文件
         document.getElementById("openDirBtn").style.display = "inline-block";
       } else if (t.status === "cancelled") {
         btn.textContent = "🚫 已中止，重新开始";
@@ -1548,3 +1690,13 @@ updateClipUI();
 renderFavorites();
 renderOutputDirs();
 renderQueue();
+
+// 文件夹选择弹窗：点击遮罩 / 按 Esc 关闭
+document.getElementById("folderModal").addEventListener("click", (e) => {
+  if (e.target.id === "folderModal") closeFolderPicker();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.getElementById("folderModal").style.display !== "none") {
+    closeFolderPicker();
+  }
+});

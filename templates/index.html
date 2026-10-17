@@ -20,6 +20,8 @@
     <div class="path-bar">
       <input type="text" id="pathInput" value="{{ media_dir }}">
       <button onclick="loadPath(document.getElementById('pathInput').value)">跳转</button>
+      <button id="pickBtn" onclick="openFolderPicker()" title="逐级浏览并选择文件夹">📁 选择</button>
+      <button id="scanBtn" onclick="scanCurrentDir()" title="递归探查当前目录下所有视频文件">🔍 探查</button>
     </div>
 
     <div class="favorites">
@@ -260,6 +262,28 @@
     </div>
 
     <div class="log-box" id="logBox"></div>
+  </div>
+</div>
+
+<!-- ============ 文件夹选择弹窗 ============ -->
+<div class="modal-mask" id="folderModal" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <span>📁 选择文件夹</span>
+      <button class="modal-close" onclick="closeFolderPicker()" title="关闭">×</button>
+    </div>
+    <div class="modal-path-row">
+      <button id="folderUpBtn" onclick="pickerGoUp()" title="上一级">⬆ 上级</button>
+      <span class="modal-path" id="folderModalPath"></span>
+    </div>
+    <ul class="modal-list" id="folderModalList"></ul>
+    <div class="modal-footer">
+      <span class="modal-hint">点击文件夹进入子目录</span>
+      <div class="modal-actions">
+        <button onclick="closeFolderPicker()">取消</button>
+        <button class="primary" onclick="confirmFolderPicker()">选择此文件夹</button>
+      </div>
+    </div>
   </div>
 </div>
 
