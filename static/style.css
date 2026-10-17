@@ -71,18 +71,29 @@ h2 {
   display: flex;
   gap: 6px;
 }
-.path-btns button {
-  flex: 1;
+.path-btns button { flex: 1; }
+
+/* ===== 统一小按钮：路径栏 / 列表工具 / 批量队列头部 ===== */
+.path-btns button,
+.list-tools-btns button,
+.queue-btn {
   background: #3a4048;
   border: none;
   color: #ddd;
   border-radius: 3px;
-  padding: 3px 8px;
-  cursor: pointer;
+  padding: 4px 8px;
   font-size: 12px;
+  line-height: 16px;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s;
 }
-.path-btns button:hover { background: #4a5058; }
+.path-btns button:hover,
+.list-tools-btns button:hover:not(:disabled),
+.queue-btn:hover:not(:disabled) { background: #4a5058; }
+.path-btns button:disabled,
+.list-tools-btns button:disabled,
+.queue-btn:disabled { opacity: 0.45; cursor: default; }
 
 /* ===== 收藏夹 ===== */
 .favorites {
@@ -185,19 +196,7 @@ h2 {
   outline: none;
 }
 .list-tools-btns { display: flex; gap: 6px; }
-.list-tools-btns button {
-  flex: 1;
-  background: #3a4048;
-  border: none;
-  color: #ddd;
-  border-radius: 3px;
-  padding: 3px 6px;
-  cursor: pointer;
-  font-size: 12px;
-  white-space: nowrap;
-}
-.list-tools-btns button:hover:not(:disabled) { background: #4a5058; }
-.list-tools-btns button:disabled { opacity: 0.45; cursor: default; }
+.list-tools-btns button { flex: 1; }
 .list-tools-btns button.primary { background: #1a73e8; color: #fff; flex: 1.6; }
 .list-tools-btns button.primary:hover:not(:disabled) { background: #2b7de9; }
 
@@ -378,6 +377,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   margin-bottom: 10px;
   gap: 8px;
 }
@@ -394,19 +394,8 @@ h2 {
   text-align: center;
 }
 .queue-count:empty { display: none; }
-.queue-header-btns { display: flex; gap: 4px; }
-.queue-btn {
-  background: #3a4048;
-  border: none;
-  color: #ccc;
-  border-radius: 3px;
-  padding: 3px 8px;
-  cursor: pointer;
-  font-size: 11px;
-  transition: background 0.15s;
-}
-.queue-btn:hover { background: #4a5058; color: white; }
-.queue-btn.danger:hover { background: #a02020; }
+.queue-header-btns { display: flex; gap: 6px; }
+.queue-btn.danger:hover:not(:disabled) { background: #a02020; }
 
 .queue-hint {
   font-size: 11px;
