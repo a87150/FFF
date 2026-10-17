@@ -1119,8 +1119,8 @@ async function loadPath(path) {
         li.onclick = () => loadPath(item.path);
         ul.appendChild(li);
       } else {
-        // 普通浏览不标注相对路径
-        ul.appendChild(buildVideoLi(item, ""));
+        // 普通浏览：悬停显示完整路径
+        ul.appendChild(buildVideoLi(item, item.path));
       }
     });
   } catch (e) {
@@ -1128,25 +1128,20 @@ async function loadPath(path) {
   }
 }
 
-// 构建视频文件行（目录浏览 / 探查结果共用）；relLabel 非空时在文件名后标注相对路径
-function buildVideoLi(item, relLabel) {
+// 构建视频文件行（目录浏览 / 探查结果共用）
+// hoverTip: 鼠标悬停提示（探查视图传相对路径，普通浏览传绝对路径）
+function buildVideoLi(item, hoverTip) {
   const li = document.createElement("li");
   li.dataset.path = item.path;
+  li.title = hoverTip || item.path;
   const inQueue = batchQueue.some(q => q.path === item.path);
   li.innerHTML = `
     <span class="icon">🎞️</span>
     <span class="name"></span>
-    ${relLabel ? '<span class="relpath"></span>' : ""}
     <span class="size">${item.size_human || ""}</span>
     <button class="add-btn${inQueue ? " added" : ""}" title="${inQueue ? "已在队列" : "加入队列"}">${inQueue ? "✓" : "+"}</button>
   `;
   li.querySelector(".name").textContent = item.name;
-  li.querySelector(".name").title = item.path;
-  if (relLabel) {
-    const rp = li.querySelector(".relpath");
-    rp.textContent = relLabel;
-    rp.title = item.path;
-  }
 
   const addBtn = li.querySelector(".add-btn");
   addBtn.onclick = (e) => {
@@ -1171,6 +1166,11 @@ function buildVideoLi(item, relLabel) {
 let pickerDir = "";
 let pickerParent = null;
 
+// Windows 盘符根目录（如 C:\）
+function isWindowsDriveRoot(path) {
+  return /^[A-Za-z]:[\\/]*$/.test(path || "");
+}
+
 async function openFolderPicker() {
   document.getElementById("folderModal").style.display = "flex";
   await loadPickerDir(currentDir || window.MEDIA_DIR);
@@ -1184,6 +1184,7 @@ async function loadPickerDir(path) {
   const pathEl = document.getElementById("folderModalPath");
   const listEl = document.getElementById("folderModalList");
   const upBtn = document.getElementById("folderUpBtn");
+  const okBtn = document.getElementById("folderConfirmBtn");
   listEl.innerHTML = '<li class="empty">加载中…</li>';
   try {
     const r = await fetch("/api/browse?path=" + encodeURIComponent(path));
@@ -1197,7 +1198,9 @@ async function loadPickerDir(path) {
     pickerParent = d.parent;
     pathEl.textContent = d.path;
     pathEl.title = d.path;
-    upBtn.disabled = !d.parent;
+    // 盘符根目录（如 C:\）也能点「上级」→ 进入「此电脑」切换盘符
+    upBtn.disabled = !(d.parent || isWindowsDriveRoot(d.path));
+    if (okBtn) okBtn.disabled = false;
 
     listEl.innerHTML = "";
     const dirs = d.items.filter(it => it.is_dir);
@@ -1217,8 +1220,46 @@ async function loadPickerDir(path) {
   }
 }
 
+// 「此电脑」视图：列出所有盘符（Windows）/ 根目录
+async function showPickerDrives() {
+  const pathEl = document.getElementById("folderModalPath");
+  const listEl = document.getElementById("folderModalList");
+  const upBtn = document.getElementById("folderUpBtn");
+  const okBtn = document.getElementById("folderConfirmBtn");
+  pickerDir = "";
+  pickerParent = null;
+  upBtn.disabled = true;
+  if (okBtn) okBtn.disabled = true;   // 「此电脑」本身不能作为目录选择
+  pathEl.textContent = "此电脑（选择盘符）";
+  pathEl.title = "";
+  listEl.innerHTML = '<li class="empty">加载中…</li>';
+  try {
+    const r = await fetch("/api/drives");
+    const d = await r.json();
+    listEl.innerHTML = "";
+    const items = d.items || [];
+    if (items.length === 0) {
+      listEl.innerHTML = '<li class="empty">（没有可用盘符）</li>';
+      return;
+    }
+    items.forEach(it => {
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="icon">💽</span><span class="name"></span>';
+      li.querySelector(".name").textContent = it.name;
+      li.onclick = () => loadPickerDir(it.path);
+      listEl.appendChild(li);
+    });
+  } catch (e) {
+    toast("加载失败: " + e, "error");
+  }
+}
+
 function pickerGoUp() {
-  if (pickerParent) loadPickerDir(pickerParent);
+  if (pickerParent) {
+    loadPickerDir(pickerParent);
+  } else if (isWindowsDriveRoot(pickerDir)) {
+    showPickerDrives();
+  }
 }
 
 function confirmFolderPicker() {
@@ -1233,11 +1274,11 @@ async function scanCurrentDir() {
   const btn = document.getElementById("scanBtn");
   const ul = document.getElementById("filelist");
   btn.disabled = true;
-  btn.textContent = "⏳ 探查中";
+  btn.textContent = "探查中…";
   ul.innerHTML = "";
   const loading = document.createElement("li");
   loading.className = "empty";
-  loading.textContent = "⏳ 正在探查 " + dir + " …";
+  loading.textContent = "正在探查 " + dir + " …";
   ul.appendChild(loading);
 
   try {
@@ -1255,7 +1296,7 @@ async function scanCurrentDir() {
     loadPath(dir);
   } finally {
     btn.disabled = false;
-    btn.textContent = "🔍 探查";
+    btn.textContent = "探查";
   }
 }
 
@@ -1280,10 +1321,10 @@ function renderScanResult(d) {
     return;
   }
 
-  // 子目录中的文件在文件名后标注相对路径（位于探查根目录的文件不重复标注）
+  // 子目录中的文件：相对路径只在鼠标悬停提示里显示，列表保持清爽
   d.items.forEach(item => {
-    const rel = (item.rel && item.rel !== item.name) ? item.rel : "";
-    ul.appendChild(buildVideoLi(item, rel));
+    const tip = (item.rel && item.rel !== item.name) ? item.rel : item.path;
+    ul.appendChild(buildVideoLi(item, tip));
   });
 }
 

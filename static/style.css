@@ -49,26 +49,30 @@ h2 {
 /* ===== 路径栏 ===== */
 .path-bar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
   margin-bottom: 10px;
   background: #2a2e35;
   border-radius: 4px;
   padding: 6px 8px;
   font-size: 12px;
-  flex-wrap: wrap;
 }
 .path-bar input {
-  flex: 1;
   background: transparent;
   border: none;
   color: #e0e0e0;
   font-family: monospace;
   font-size: 12px;
   outline: none;
+  width: 100%;
   min-width: 0;
 }
-.path-bar button {
+.path-btns {
+  display: flex;
+  gap: 6px;
+}
+.path-btns button {
+  flex: 1;
   background: #3a4048;
   border: none;
   color: #ddd;
@@ -78,7 +82,7 @@ h2 {
   font-size: 12px;
   white-space: nowrap;
 }
-.path-bar button:hover { background: #4a5058; }
+.path-btns button:hover { background: #4a5058; }
 
 /* ===== 收藏夹 ===== */
 .favorites {
@@ -184,16 +188,6 @@ h2 {
   white-space: nowrap;
 }
 .filelist li .size { color: #666; font-size: 11px; flex-shrink: 0; }
-.filelist li .relpath {
-  color: #7c8a99;
-  font-size: 11px;
-  font-family: monospace;
-  flex-shrink: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 45%;
-}
 .filelist li.up { color: #8ab4f8; }
 
 .filelist li .add-btn {

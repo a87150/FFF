@@ -6,6 +6,7 @@ HTTP 路由层：页面、目录浏览、媒体信息、预览、转码提交、
 
 import os
 import platform
+import re
 import time
 
 from flask import Blueprint, jsonify, render_template, request, send_file
@@ -22,6 +23,14 @@ from tasks import manager
 bp = Blueprint("main", __name__)
 
 
+def _normalize_dir_arg(path):
+    """展开 ~、把 Windows 盘符简写（如 "D:"）补成 "D:\\"，再取绝对路径"""
+    path = os.path.expanduser(path)
+    if re.match(r"^[A-Za-z]:$", path):
+        path += "\\"
+    return os.path.abspath(path)
+
+
 @bp.route("/")
 def index():
     return render_template("index.html", ffmpeg_path=FFMPEG, media_dir=MEDIA_DIR)
@@ -30,7 +39,7 @@ def index():
 @bp.route("/api/browse")
 def browse():
     path = request.args.get("path") or MEDIA_DIR
-    path = os.path.abspath(os.path.expanduser(path))
+    path = _normalize_dir_arg(path)
 
     if not os.path.exists(path):
         return jsonify({"error": f"路径不存在: {path}"}), 404
@@ -68,11 +77,28 @@ def browse():
         return jsonify({"error": str(e)}), 500
 
 
+@bp.route("/api/drives")
+def drives():
+    """盘符列表：Windows 返回所有存在的盘符，其他系统返回根目录"""
+    items = []
+    if os.name == "nt":
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            root = f"{letter}:\\"
+            try:
+                if os.path.exists(root):
+                    items.append({"name": f"{letter}:", "path": root})
+            except OSError:
+                continue
+    else:
+        items.append({"name": "/", "path": "/"})
+    return jsonify({"items": items})
+
+
 @bp.route("/api/scan")
 def scan():
     """递归探查目录下所有视频文件（跳过隐藏目录），供前端"探查"功能使用"""
     path = request.args.get("path") or MEDIA_DIR
-    path = os.path.abspath(os.path.expanduser(path))
+    path = _normalize_dir_arg(path)
 
     if not os.path.exists(path):
         return jsonify({"error": f"路径不存在: {path}"}), 404
