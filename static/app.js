@@ -20,6 +20,8 @@ let batchDone = 0;
 const FAV_KEY = "ffmpeg_web_favorites";
 const OUT_DIR_KEY = "ffmpeg_web_output_dirs";
 const SETTINGS_KEY = "ffmpeg_web_settings_v1";
+const ACTIVE_TASK_KEY = "ffmpeg_web_active_task_v1";   // 单文件任务（刷新后恢复用）
+const BATCH_STATE_KEY = "ffmpeg_web_batch_state_v1";   // 批量队列与运行状态（刷新后恢复用）
 
 const SETTING_IDS = ["platform", "format", "qualityMode", "qualityValue", "bitrate",
                      "preset", "scale", "acodec", "abitrate", "extra",
@@ -642,6 +644,108 @@ function setupTrimInput(id) {
 setupTrimInput("headTrim");
 setupTrimInput("tailTrim");
 
+// ==================== 刷新恢复（任务状态持久化） ====================
+// 服务端任务不受页面刷新影响，这里把界面状态存进 localStorage，刷新后重新接管
+function isTerminalStatus(s) { return ["completed", "failed", "cancelled"].includes(s); }
+
+function saveActiveTask(taskId, input, output) {
+  try { localStorage.setItem(ACTIVE_TASK_KEY, JSON.stringify({ taskId, input, output })); }
+  catch (e) {}
+}
+function loadActiveTask() {
+  try { return JSON.parse(localStorage.getItem(ACTIVE_TASK_KEY) || "null"); }
+  catch (e) { return null; }
+}
+function clearActiveTask() {
+  try { localStorage.removeItem(ACTIVE_TASK_KEY); } catch (e) {}
+}
+function saveBatchState() {
+  try {
+    localStorage.setItem(BATCH_STATE_KEY, JSON.stringify({
+      running: isBatchRunning, cancelled: batchCancelled, queue: batchQueue,
+    }));
+  } catch (e) {}
+}
+function loadBatchState() {
+  try {
+    const s = JSON.parse(localStorage.getItem(BATCH_STATE_KEY) || "null");
+    return s && Array.isArray(s.queue) ? s : null;
+  } catch (e) { return null; }
+}
+
+// 按输出路径找回服务端任务（提交请求的过程中刷新时用）
+async function findTaskByOutput(outputPath) {
+  try {
+    const r = await fetch("/api/tasks");
+    if (!r.ok) return null;
+    const d = await r.json();
+    const norm = p => (p || "").replace(/\\/g, "/").toLowerCase();
+    const list = (d.tasks || []).filter(t => norm(t.output) === norm(outputPath));
+    return list.length ? list[list.length - 1] : null;
+  } catch (e) { return null; }
+}
+
+// 刷新后恢复：先恢复批量队列（进行中则继续执行），再恢复单文件任务
+async function restoreSession() {
+  const saved = loadBatchState();
+  if (saved && saved.queue.length > 0) {
+    batchQueue = saved.queue;
+    batchTotal = batchQueue.length;
+    batchDone = batchQueue.filter(it => isTerminalStatus(it.status)).length;
+    renderQueue();
+    if (saved.running && saved.cancelled) {
+      // 刷新前已点过「中止」：把还没结束的项直接标记为已中止
+      batchQueue.forEach(it => { if (!isTerminalStatus(it.status)) it.status = "cancelled"; });
+      batchDone = batchQueue.filter(it => isTerminalStatus(it.status)).length;
+      saveBatchState();
+      renderQueue();
+    } else if (saved.running) {
+      runBatch({ resume: true });
+    }
+  } else {
+    renderQueue();
+  }
+  if (!isBatchRunning) await restoreSingleTask();
+}
+
+// 刷新后恢复单文件任务：还在运行就继续接管，已结束就还原结果
+async function restoreSingleTask() {
+  const saved = loadActiveTask();
+  if (!saved || !saved.taskId) return;
+
+  let t;
+  try {
+    const r = await fetch("/api/task/" + saved.taskId);
+    if (!r.ok) { clearActiveTask(); return; }   // 任务已被清理（或服务已重启）
+    t = await r.json();
+  } catch (e) { return; }   // 服务器暂时不可达：保留状态，下次刷新再试
+
+  if (saved.input) $("inputPath").value = saved.input;
+  if (saved.output) {
+    $("outputPath").value = saved.output;
+    outputManuallyEdited = true;
+  }
+
+  if (t.status === "pending" || t.status === "running") {
+    // 任务还在跑：恢复界面并继续等待
+    currentTaskId = saved.taskId;
+    const btn = $("submitBtn");
+    const stopBtn = $("stopBtn");
+    btn.disabled = true;
+    btn.textContent = "运行中…";
+    stopBtn.style.display = "inline-block";
+    stopBtn.disabled = false;
+    $("progressWrap").style.display = "block";
+    $("logBox").style.display = "block";
+    updateProgressUI(t);
+    const done = await waitForTask(saved.taskId);
+    currentTaskId = null;
+    finishSingleTask(done);
+  } else {
+    finishSingleTask(t, true);
+  }
+}
+
 // ==================== 批量队列 ====================
 function renderQueue() {
   const ul = $("queueList");
@@ -722,6 +826,7 @@ function addToQueue(path, name) {
     taskId: null,
     error: "",
   });
+  saveBatchState();
   renderQueue();
 }
 
@@ -731,6 +836,7 @@ function removeFromQueue(idx) {
     return;
   }
   batchQueue.splice(idx, 1);
+  saveBatchState();
   renderQueue();
   // 同步左侧按钮状态
   refreshFileListAddButtons();
@@ -746,6 +852,7 @@ function clearQueue() {
   batchQueue = [];
   batchTotal = 0;
   batchDone = 0;
+  saveBatchState();
   renderQueue();
   refreshFileListAddButtons();
 }
@@ -761,6 +868,7 @@ function clearCompleted() {
     toast("没有已完成的项目", "warn");
     return;
   }
+  saveBatchState();
   renderQueue();
   refreshFileListAddButtons();
 }
@@ -785,6 +893,7 @@ function retryFailed() {
     toast("没有失败或中止的项目", "warn");
     return;
   }
+  saveBatchState();
   renderQueue();
   toast(`已把 ${n} 个项目重置为待处理`, "ok");
 }
@@ -811,6 +920,7 @@ function refreshFileListAddButtons() {
 function updateQueueItem(idx, patch) {
   if (idx < 0 || idx >= batchQueue.length) return;
   Object.assign(batchQueue[idx], patch);
+  saveBatchState();
   renderQueue();
 }
 
@@ -1526,6 +1636,10 @@ function waitForTask(taskId) {
       try {
         const r = await fetch("/api/task/" + taskId);
         const t = await r.json();
+        if (!r.ok) {
+          resolve({ status: "failed", error: t.error || "任务不存在或已被清理" });
+          return;
+        }
         errors = 0;
         if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
           resolve(t);
@@ -1588,6 +1702,7 @@ async function runSingle() {
       return;
     }
     currentTaskId = d.task_id;
+    saveActiveTask(d.task_id, payload.input, payload.output);
     $("progressWrap").style.display = "block";
     $("logBox").style.display = "block";
     $("logBox").textContent = "$ " + (d.cmd || "");
@@ -1609,8 +1724,8 @@ async function runSingle() {
   }
 }
 
-// 单任务结束后的界面收尾
-function finishSingleTask(t) {
+// 单任务结束后的界面收尾（restored=true 表示刷新后还原，不再弹提示/重复刷新列表）
+function finishSingleTask(t, restored) {
   const btn = $("submitBtn");
   const stopBtn = $("stopBtn");
   updateProgressUI(t);
@@ -1621,33 +1736,41 @@ function finishSingleTask(t) {
 
   if (t.status === "completed") {
     btn.textContent = "✅ 完成，再来一次";
-    refreshView();  // 刷新当前视图（含探查结果），显示新生成的文件
+    if (!restored) refreshView();  // 刷新当前视图（含探查结果），显示新生成的文件
     $("openDirBtn").style.display = "inline-block";
   } else if (t.status === "cancelled") {
     btn.textContent = "🚫 已中止，重新开始";
   } else {
     btn.textContent = "❌ 失败，重试";
-    toast("任务失败：" + (t.error || "未知错误"), "error");
+    if (!restored) toast("任务失败：" + (t.error || "未知错误"), "error");
   }
   if (t.error) {
     $("logBox").textContent += "\n\n[提示] " + t.error;
   }
 }
 
-async function runBatch() {
+async function runBatch(opts) {
+  opts = opts || {};
+  const resume = !!opts.resume;   // resume=true：刷新后接管未完成的队列，跳过已结束的项
   if (isBatchRunning) return;
   isBatchRunning = true;
   batchCancelled = false;
   batchTotal = batchQueue.length;
-  batchDone = 0;
 
-  batchQueue.forEach(item => {
-    item.status = "pending";
-    item.taskId = null;
-    item.error = "";
-    item.outName = "";
-  });
+  if (resume) {
+    batchDone = batchQueue.filter(it => isTerminalStatus(it.status)).length;
+  } else {
+    batchDone = 0;
+    batchQueue.forEach(item => {
+      item.status = "pending";
+      item.taskId = null;
+      item.error = "";
+      item.outName = "";
+    });
+  }
   renderQueue();
+  saveBatchState();
+  clearActiveTask();   // 批量任务接管进度区，单文件恢复状态不再需要
 
   const btn = $("submitBtn");
   const stopBtn = $("stopBtn");
@@ -1659,8 +1782,8 @@ async function runBatch() {
   $("openDirBtn").style.display = "none";
 
   const platform = $("platform").value;
-  let successCount = 0;
-  let failedCount = 0;
+  let successCount = batchQueue.filter(it => it.status === "completed").length;
+  let failedCount = batchQueue.filter(it => it.status === "failed").length;
 
   // 单个文件失败收尾：计数 + 更新队列状态
   const markFailed = (i, msg) => {
@@ -1679,61 +1802,94 @@ async function runBatch() {
           marked = true;
         }
       }
-      if (marked) renderQueue();
+      if (marked) { saveBatchState(); renderQueue(); }
       break;
     }
 
     const item = batchQueue[i];
+    if (resume && isTerminalStatus(item.status)) continue;   // 已结束的项直接跳过
+
     const outPath = computeOutputPath(item.path);
-    updateQueueItem(i, { status: "running", outName: splitPath(outPath).filename });
-    btn.textContent = `批量 ${i + 1}/${batchQueue.length}`;
+    let taskId = null;
 
-    let payload;
-
-    if (platform === "smart") {
-      // 智能模式：每个文件单独分析
-      try {
+    if (resume && item.status === "running") {
+      // 刷新前正在处理：能找回服务端任务就接管，找不回则退回待处理重新提交
+      if (item.taskId) {
+        taskId = item.taskId;
+      } else {
+        const found = await findTaskByOutput(outPath);
+        if (found && (found.status === "pending" || found.status === "running")) {
+          taskId = found.id;
+          updateQueueItem(i, { taskId: taskId });
+        }
+      }
+      if (taskId) {
+        btn.textContent = `批量 ${i + 1}/${batchQueue.length}`;
         $("logBox").textContent =
-          `[${i + 1}/${batchQueue.length}] ${item.name}\n⏳ 正在分析源文件…`;
-        const ir = await fetch("/api/info?path=" + encodeURIComponent(item.path));
-        const srcInfo = await ir.json();
-        if (srcInfo.error) {
-          markFailed(i, "读取源信息失败");
+          `[${i + 1}/${batchQueue.length}] ${item.name}\n（已接管刷新前进行中的任务，等待完成）`;
+      } else {
+        updateQueueItem(i, { status: "pending", error: "" });
+      }
+    }
+
+    if (!taskId) {
+      // 正常提交（智能模式每个文件单独分析）
+      updateQueueItem(i, { status: "running", outName: splitPath(outPath).filename });
+      btn.textContent = `批量 ${i + 1}/${batchQueue.length}`;
+
+      let payload;
+
+      if (platform === "smart") {
+        try {
+          $("logBox").textContent =
+            `[${i + 1}/${batchQueue.length}] ${item.name}\n⏳ 正在分析源文件…`;
+          const ir = await fetch("/api/info?path=" + encodeURIComponent(item.path));
+          const srcInfo = await ir.json();
+          if (srcInfo.error) {
+            markFailed(i, "读取源信息失败");
+            continue;
+          }
+          const params = resolveSmartParams(srcInfo);
+          payload = buildPayload(item.path, outPath, { trim: "batch", params });
+          $("logBox").textContent =
+            `[${i + 1}/${batchQueue.length}] ${item.name}\n` +
+            `🧠 智能选择：${params.platform} / ${params.format} / ` +
+            `q=${params.quality_value}${params.bitrate ? " / " + params.bitrate : ""} / ${params.preset}`;
+        } catch (e) {
+          markFailed(i, "分析失败: " + e);
           continue;
         }
-        const params = resolveSmartParams(srcInfo);
-        payload = buildPayload(item.path, outPath, { trim: "batch", params });
-        $("logBox").textContent =
-          `[${i + 1}/${batchQueue.length}] ${item.name}\n` +
-          `🧠 智能选择：${params.platform} / ${params.format} / ` +
-          `q=${params.quality_value}${params.bitrate ? " / " + params.bitrate : ""} / ${params.preset}`;
+      } else {
+        payload = buildPayload(item.path, outPath, { trim: "batch" });
+      }
+
+      try {
+        const d = await postTranscode(payload);
+        if (d.error) {
+          markFailed(i, d.error);
+          continue;
+        }
+        taskId = d.task_id;
+        currentTaskId = taskId;
+        updateQueueItem(i, { taskId: taskId });
+
+        if (platform !== "smart") {
+          $("logBox").textContent =
+            `[${i + 1}/${batchQueue.length}] ${item.name}\n$ ${d.cmd || ""}` +
+            (d.audio_note ? `\n\n[提示] ${d.audio_note}` : "");
+        } else if (d.audio_note) {
+          $("logBox").textContent += `\n\n[提示] ${d.audio_note}`;
+        }
       } catch (e) {
-        markFailed(i, "分析失败: " + e);
+        markFailed(i, String(e));
         continue;
       }
     } else {
-      payload = buildPayload(item.path, outPath, { trim: "batch" });
+      currentTaskId = taskId;
     }
 
     try {
-      const d = await postTranscode(payload);
-      if (d.error) {
-        markFailed(i, d.error);
-        continue;
-      }
-
-      currentTaskId = d.task_id;
-      updateQueueItem(i, { taskId: d.task_id });
-
-      if (platform !== "smart") {
-        $("logBox").textContent =
-          `[${i + 1}/${batchQueue.length}] ${item.name}\n$ ${d.cmd || ""}` +
-          (d.audio_note ? `\n\n[提示] ${d.audio_note}` : "");
-      } else if (d.audio_note) {
-        $("logBox").textContent += `\n\n[提示] ${d.audio_note}`;
-      }
-
-      const result = await waitForTask(d.task_id);
+      const result = await waitForTask(taskId);
       batchDone++;
       if (result.status === "completed") {
         successCount++;
@@ -1756,6 +1912,7 @@ async function runBatch() {
   btn.textContent = `批量完成（成功 ${successCount} / 失败 ${failedCount}）`;
   setTimeout(() => { btn.textContent = "开始转码"; }, 3000);
   renderQueue();
+  saveBatchState();
 
   // 刷新文件列表（显示新生成的文件），并提供打开输出目录入口
   refreshView();
@@ -1772,7 +1929,10 @@ async function stopTask() {
   const msg = isBatchRunning ? "确定要中止批量任务吗？" : "确定要中止当前任务吗？";
   if (!confirm(msg + "已生成的部分文件会被保留。")) return;
 
-  if (isBatchRunning) batchCancelled = true;
+  if (isBatchRunning) {
+    batchCancelled = true;
+    saveBatchState();
+  }
 
   stopBtn.disabled = true;
   stopBtn.textContent = "中止中…";
@@ -1802,7 +1962,7 @@ loadPath(currentDir);
 updateClipUI();
 renderFavorites();
 renderOutputDirs();
-renderQueue();
+restoreSession();   // 恢复上次未完成 / 刚结束的任务与批量队列
 
 // 文件夹选择弹窗：点击遮罩 / 按 Esc 关闭
 $("folderModal").addEventListener("click", (e) => {

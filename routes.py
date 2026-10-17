@@ -315,6 +315,11 @@ def task_status(task_id):
     return jsonify(task)
 
 
+@bp.route("/api/tasks")
+def list_tasks():
+    return jsonify({"tasks": manager.list_tasks()})
+
+
 @bp.route("/api/task/<task_id>/stop", methods=["POST"])
 def stop_task(task_id):
     code, body = manager.stop(task_id)

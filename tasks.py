@@ -60,6 +60,15 @@ class TaskManager:
             task = self._tasks.get(task_id)
             return dict(task) if task else None
 
+    def list_tasks(self):
+        """任务摘要列表（含输入/输出路径），供前端刷新后找回进行中的任务"""
+        with self._tasks_lock:
+            return [
+                {"id": t["id"], "status": t["status"],
+                 "input": t.get("input", ""), "output": t.get("output", "")}
+                for t in self._tasks.values()
+            ]
+
     def process_started(self, task_id):
         """子进程是否已注册（处于 running 且 Popen 已完成）"""
         with self._process_lock:

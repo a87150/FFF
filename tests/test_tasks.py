@@ -157,6 +157,22 @@ class TestStop:
         assert task["status"] in ("failed", "cancelled")
 
 
+class TestListTasks:
+    def test_summaries_include_paths(self):
+        mgr = make_manager()
+        tid = mgr.create_task([PY, "-c", "import time; time.sleep(0.2)"],
+                              duration=1, input_path="in.mp4", output_path="out.mp4")
+        items = mgr.list_tasks()
+        me = [t for t in items if t["id"] == tid]
+        assert len(me) == 1
+        assert set(me[0].keys()) == {"id", "status", "input", "output"}
+        assert me[0]["input"] == "in.mp4"
+        assert me[0]["output"] == "out.mp4"
+        assert me[0]["status"] in ("pending", "running", "completed")
+        # 不影响任务本身的正常结束
+        assert wait_status(mgr, tid, {"completed", "failed"})["status"] == "completed"
+
+
 class TestPruning:
     def test_old_finished_tasks_pruned(self):
         mgr = make_manager(max_tasks_kept=3)
