@@ -35,8 +35,14 @@
 
 ```
 ffmpeg-web/
-├── app.py                 # Flask 后端
-├── requirements.txt       # Python 依赖
+├── app.py                 # 启动入口（Flask app 工厂）
+├── config.py              # 全局配置（路径 / 容器兼容表 / 参数白名单）
+├── ffmpeg_utils.py        # FFmpeg 工具层（探测 / 命令构建 / 兼容性检查 / 进度换算）
+├── tasks.py               # 任务管理（并发控制 / 子进程 / 进度 / 中止）
+├── routes.py              # HTTP 路由
+├── requirements.txt       # 运行依赖
+├── requirements-dev.txt   # 开发依赖（pytest）
+├── tests/                 # 单元测试（pytest）
 ├── run.ps1                # Windows 一键启动脚本
 ├── run.sh                 # Linux/macOS 一键启动脚本
 ├── templates/
@@ -126,13 +132,13 @@ source venv/bin/activate
 venv\Scripts\activate
 
 # 安装依赖
-pip install flask
+pip install -r requirements.txt
 ```
 
 国内加速：
 
 ```bash
-pip install flask -i https://pypi.tuna.tsinghua.edu.cn/simple
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ---
@@ -165,6 +171,7 @@ python app.py
 export PORT=8080
 export MEDIA_DIR=/vol1/1000/Media
 export VAAPI_DEVICE=/dev/dri/renderD128   # 仅 VAAPI 需要
+export USE_WAITRESS=1                     # 可选：生产服务器（pip install waitress）
 python app.py
 
 # Windows PowerShell
@@ -178,6 +185,7 @@ python app.py
 - `MEDIA_DIR`：Windows 为用户主目录，Linux 为 `/`
 - `VAAPI_DEVICE=/dev/dri/renderD128`
 - `MAX_CONCURRENT_TASKS=1`：同时运行的转码任务数上限，超出的任务自动排队
+- `USE_WAITRESS=1`：用 [waitress](https://github.com/Pylons/waitress) 替代内置开发服务器（需先 `pip install waitress`；未安装时自动回退）
 
 ---
 
@@ -222,6 +230,18 @@ nssm install FFmpegWeb "C:\path\to\python.exe" "C:\path\to\app.py"
 nssm set FFmpegWeb AppDirectory "C:\path\to\ffmpeg-web"
 nssm start FFmpegWeb
 ```
+
+---
+
+### 5. （可选）运行测试
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests/ -v
+```
+
+覆盖内容：时间/速度解析、容器兼容与音频自动切换、各平台编码参数生成、进度/剩余时间换算、
+任务生命周期（完成 / 失败 / 排队 / 中止）。
 
 ---
 

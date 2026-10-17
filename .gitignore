@@ -1,7 +1,14 @@
-.gitignore
+# FFmpeg 二进制（需自行下载，不入库）
 ffmpeg
 ffprobe
 ffplay
 ffmpeg.exe
 ffprobe.exe
 ffplay.exe
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
