@@ -7,7 +7,7 @@
   说明：
     - 自动查找 Python（python / py）
     - 自动创建虚拟环境 .venv 并安装依赖（首次运行需要联网）
-    - 自动检查项目目录下的 ffmpeg.exe / ffprobe.exe
+    - 自动检查 FFmpeg 文件夹下的 ffmpeg.exe / ffprobe.exe
     - Ctrl+C 即可停止服务
 #>
 param(
@@ -70,10 +70,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------- 4. 检查 FFmpeg 并启动 ----------
-if (-not (Test-Path (Join-Path $PSScriptRoot "ffmpeg.exe"))) {
-    Write-Host "[警告] 项目目录没有 ffmpeg.exe / ffprobe.exe，将尝试使用系统 PATH 中的 FFmpeg。" -ForegroundColor Yellow
+$hasFfmpeg = (Test-Path (Join-Path $PSScriptRoot "FFmpeg\ffmpeg.exe")) -or (Test-Path (Join-Path $PSScriptRoot "ffmpeg.exe"))
+if (-not $hasFfmpeg) {
+    Write-Host "[警告] FFmpeg 文件夹里没有 ffmpeg.exe / ffprobe.exe，将尝试使用系统 PATH 中的 FFmpeg。" -ForegroundColor Yellow
     Write-Host "       下载：https://github.com/BtbN/FFmpeg-Builds/releases"
-    Write-Host "       解压 win64-gpl.zip 后把 bin 里的 ffmpeg.exe、ffprobe.exe 复制到本目录即可。"
+    Write-Host "       解压 win64-gpl.zip 后把 bin 里的 ffmpeg.exe、ffprobe.exe 复制到 FFmpeg 文件夹即可。"
 }
 
 if ($Port -gt 0) { $env:PORT = "$Port" }

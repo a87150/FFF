@@ -8,7 +8,7 @@
 # 说明：
 #   - 自动查找 Python3
 #   - 自动创建虚拟环境 .venv 并安装依赖（首次运行需要联网）
-#   - 自动检查项目目录下的 ffmpeg / ffprobe
+#   - 自动检查 FFmpeg 目录下的 ffmpeg / ffprobe
 #   - Ctrl+C 即可停止服务
 set -e
 
@@ -64,14 +64,16 @@ else
 fi
 
 # ---------- 4. 检查 FFmpeg 并启动 ----------
-if [ ! -x "$SCRIPT_DIR/ffmpeg" ]; then
-    if [ -f "$SCRIPT_DIR/ffmpeg" ]; then
-        chmod +x "$SCRIPT_DIR/ffmpeg" "$SCRIPT_DIR/ffprobe" 2>/dev/null || true
-    else
-        echo "[警告] 项目目录没有 ffmpeg / ffprobe，将尝试使用系统 PATH 中的 FFmpeg。"
-        echo "       下载: https://johnvansickle.com/ffmpeg/ "
-        echo "       解压后复制 ffmpeg、ffprobe 到本目录并执行 chmod +x ffmpeg ffprobe"
-    fi
+FFMPEG_DIR="$SCRIPT_DIR/FFmpeg"
+if [ -f "$FFMPEG_DIR/ffmpeg" ]; then
+    chmod +x "$FFMPEG_DIR/ffmpeg" "$FFMPEG_DIR/ffprobe" 2>/dev/null || true
+elif [ -f "$SCRIPT_DIR/ffmpeg" ]; then
+    # 兼容旧布局：可执行文件直接放在项目根目录
+    chmod +x "$SCRIPT_DIR/ffmpeg" "$SCRIPT_DIR/ffprobe" 2>/dev/null || true
+else
+    echo "[警告] FFmpeg 目录没有 ffmpeg / ffprobe，将尝试使用系统 PATH 中的 FFmpeg。"
+    echo "       下载: https://johnvansickle.com/ffmpeg/ "
+    echo "       解压后复制 ffmpeg、ffprobe 到 FFmpeg 目录并执行: chmod +x FFmpeg/ffmpeg FFmpeg/ffprobe"
 fi
 
 if [ -n "${1:-}" ] && [ "$1" -eq "$1" ] 2>/dev/null; then

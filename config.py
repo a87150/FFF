@@ -15,13 +15,10 @@ IS_LINUX = platform.system() == "Linux"
 
 
 def find_executable(name):
-    """优先找项目目录下自带的可执行文件，其次找系统 PATH"""
-    candidates = []
-    if IS_WINDOWS:
-        for ext in (".exe", ".cmd", ".bat", ""):
-            candidates.append(os.path.join(BASE_DIR, name + ext))
-    else:
-        candidates.append(os.path.join(BASE_DIR, name))
+    """优先找项目 FFmpeg/ 目录下自带的可执行文件，其次项目根目录（旧布局），最后系统 PATH"""
+    exts = (".exe", ".cmd", ".bat", "") if IS_WINDOWS else ("",)
+    candidates = [os.path.join(BASE_DIR, "FFmpeg", name + ext) for ext in exts]
+    candidates += [os.path.join(BASE_DIR, name + ext) for ext in exts]
     for path in candidates:
         if os.path.isfile(path):
             return path

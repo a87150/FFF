@@ -53,10 +53,11 @@ ffmpeg-web/
 ├── static/
 │   ├── style.css          # 样式
 │   └── app.js             # 前端逻辑
-├── ffmpeg.exe  (Windows)  # FFmpeg 可执行文件（需自行下载）
-├── ffprobe.exe (Windows)
-├── ffmpeg      (Linux)
-└── ffprobe     (Linux)
+└── FFmpeg/                # FFmpeg 可执行文件（需自行下载放入）
+    ├── ffmpeg.exe         (Windows)
+    ├── ffprobe.exe        (Windows)
+    ├── ffmpeg             (Linux)
+    └── ffprobe            (Linux)
 ```
 
 ---
@@ -92,13 +93,13 @@ chmod +x run.sh    # 首次
 
 ### 前置：准备 FFmpeg
 
-程序**不包含** FFmpeg，需要你单独下载并放到项目根目录。
+程序**不包含** FFmpeg，需要你单独下载并放到项目里的 `FFmpeg` 文件夹（没有就新建一个）。
 
 **Windows**
 
 1. 打开 https://github.com/BtbN/FFmpeg-Builds/releases
 2. 下载 `ffmpeg-master-latest-win64-gpl.zip`
-3. 解压后，把 `bin` 目录里的 `ffmpeg.exe`、`ffprobe.exe` 复制到项目根目录
+3. 解压后，把 `bin` 目录里的 `ffmpeg.exe`、`ffprobe.exe` 复制到项目的 `FFmpeg` 文件夹
 
 **Linux**
 
@@ -108,13 +109,14 @@ cd /tmp
 wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
 tar -xf ffmpeg-release-amd64-static.tar.xz
 
-# 复制到项目目录（无后缀）
-cp ffmpeg-*-static/ffmpeg  /path/to/ffmpeg-web/
-cp ffmpeg-*-static/ffprobe /path/to/ffmpeg-web/
-chmod +x /path/to/ffmpeg-web/ffmpeg /path/to/ffmpeg-web/ffprobe
+# 复制到项目的 FFmpeg 目录（无后缀）
+mkdir -p /path/to/ffmpeg-web/FFmpeg
+cp ffmpeg-*-static/ffmpeg  /path/to/ffmpeg-web/FFmpeg/
+cp ffmpeg-*-static/ffprobe /path/to/ffmpeg-web/FFmpeg/
+chmod +x /path/to/ffmpeg-web/FFmpeg/ffmpeg /path/to/ffmpeg-web/FFmpeg/ffprobe
 ```
 
-程序会自动优先使用同目录下的 ffmpeg，找不到时回退到系统 `PATH`。
+程序会自动优先使用 `FFmpeg` 文件夹里的可执行文件（旧版本直接放在项目根目录也兼容），找不到时回退到系统 `PATH`。
 
 ---
 
@@ -156,8 +158,8 @@ python app.py
 
 ```
 [FFmpeg Web] 系统    = Linux 6.x
-[FFmpeg Web] FFMPEG  = /path/to/ffmpeg-web/ffmpeg
-[FFmpeg Web] FFPROBE = /path/to/ffmpeg-web/ffprobe
+[FFmpeg Web] FFMPEG  = /path/to/ffmpeg-web/FFmpeg/ffmpeg
+[FFmpeg Web] FFPROBE = /path/to/ffmpeg-web/FFmpeg/ffprobe
  * Running on http://0.0.0.0:5000
 ```
 
@@ -371,10 +373,10 @@ CRF 是"目标质量"，不是"目标大小"。如果源文件本身用低效编
 
 ### Q1：启动后显示「未找到 FFmpeg」
 
-检查项目根目录有没有 `ffmpeg.exe` / `ffmpeg`（Linux 无后缀），并确认有执行权限：
+检查 `FFmpeg` 文件夹里有没有 `ffmpeg.exe` / `ffprobe.exe`（Linux 为无后缀的 `ffmpeg` / `ffprobe`），并确认有执行权限：
 
 ```bash
-chmod +x ffmpeg ffprobe
+chmod +x FFmpeg/ffmpeg FFmpeg/ffprobe
 ```
 
 ### Q2：转码失败，日志显示 "codec not currently supported in container"
