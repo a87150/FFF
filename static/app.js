@@ -327,7 +327,7 @@ function onQualityModeChange() {
 
 // ==================== 参数记忆（localStorage） ====================
 function saveSettings() {
-  const data = {};
+  const data = { clipMode: clipMode() };
   SETTING_IDS.forEach(id => {
     const el = $(id);
     if (el) data[id] = el.value;
@@ -357,6 +357,8 @@ function loadSettings() {
     }
     el.value = data[id];
   });
+
+  if (data.clipMode === "batch" || data.clipMode === "single") setClipMode(data.clipMode);
 
   onQualityModeChange();
 
@@ -565,14 +567,16 @@ function applyRecommendation(mode) {
 }
 
 // ==================== 输出路径智能生成 ====================
-function isClipping() {
+// 是否设置了剪辑（按模式只算所属模式的时间：单文件=起始/结束，批量=片头/片尾）
+function isClipping(mode) {
+  if ((mode || clipMode()) === "batch") {
+    const h = $("headTrim").value.trim();
+    const t = $("tailTrim").value.trim();
+    return (h && h !== "00:00:00") || (t && t !== "00:00:00");
+  }
   const s = $("startTime").value.trim();
   const e = $("endTime").value.trim();
-  if ((s && s !== "00:00:00") || e) return true;
-  const h = $("headTrim").value.trim();
-  const t = $("tailTrim").value.trim();
-  if ((h && h !== "00:00:00") || (t && t !== "00:00:00")) return true;
-  return false;
+  return (s && s !== "00:00:00") || !!e;
 }
 
 function isTranscoding() {
@@ -585,8 +589,8 @@ function currentCodecTag() {
   return ($("format").value || "h264").toLowerCase();
 }
 
-function calcSuffix(sameDir) {
-  const clip = isClipping();
+function calcSuffix(sameDir, mode) {
+  const clip = isClipping(mode);
   const trans = isTranscoding();
   const codec = currentCodecTag();
   if (clip && trans) return "_cut_" + codec;
@@ -601,10 +605,10 @@ function pickOutputExt(inputExt) {
   return ".mp4";
 }
 
-function computeOutputPath(inputPath) {
+function computeOutputPath(inputPath, mode) {
   if (!inputPath) return "";
   const { dir, base, ext } = splitPath(inputPath);
-  const suffix = calcSuffix(true);
+  const suffix = calcSuffix(true, mode);
   const outExt = pickOutputExt(ext);
   return joinPath(dir, base + suffix + outExt);
 }
@@ -943,10 +947,11 @@ function collectEncoderParams(overrides) {
   };
 }
 
-// 构建 /api/transcode 请求体；trim="batch" 用批量裁剪字段，否则用单文件精确剪辑时间
+// 构建 /api/transcode 请求体；trim 可选（"batch" 用批量字段），默认按当前剪辑模式
 function buildPayload(inputPath, outputPath, opts) {
   opts = opts || {};
-  const timing = opts.trim === "batch"
+  const batch = (opts.trim || clipMode()) === "batch";
+  const timing = batch
     ? { start_time: "", end_time: "", head_trim: $("headTrim").value.trim(), tail_trim: $("tailTrim").value.trim() }
     : { start_time: $("startTime").value, end_time: $("endTime").value, head_trim: "", tail_trim: "" };
   return Object.assign({ input: inputPath, output: outputPath }, timing, collectEncoderParams(opts.params));
@@ -1144,6 +1149,38 @@ function updateClipUI() {
   else if (videoDuration > 0) dur = videoDuration - s;
   hint.textContent = dur > 0 ? `剪辑时长：${formatTime(dur)}` : "剪辑时长：--";
 }
+
+// ==================== 剪辑模式（单文件精确剪辑 / 批量裁剪） ====================
+function clipMode() {
+  const el = document.querySelector('input[name="clipMode"]:checked');
+  return el && el.value === "batch" ? "batch" : "single";
+}
+
+// 切换模式：时间输入区整体切换；两种模式的行结构样式一致
+function setClipMode(mode) {
+  const batch = mode === "batch";
+  const radio = document.querySelector(`input[name="clipMode"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  $("singleClipBox").style.display = batch ? "none" : "";
+  $("batchClipBox").style.display = batch ? "" : "none";
+  $("clipBar").style.display = batch ? "none" : "";
+  document.querySelector(".clip-time-tip").style.display = batch ? "none" : "";
+  updateClipUI();
+  updateOutputPath();   // 输出名后缀按当前模式的时间规则生成
+}
+
+// 批量裁剪「清零」
+function resetTrim(id) {
+  $(id).value = "00:00:00";
+  onTimeChanged();
+}
+
+document.querySelectorAll('input[name="clipMode"]').forEach(radio => {
+  radio.addEventListener("change", () => {
+    setClipMode(radio.value);
+    saveSettings();   // 记住选择的模式
+  });
+});
 
 // ==================== 文件浏览 ====================
 async function loadPath(path) {
@@ -1662,9 +1699,19 @@ function waitForTask(taskId) {
 }
 
 async function submitTask() {
-  if (batchQueue.length > 0) {
+  if (clipMode() === "batch") {
+    if (batchQueue.length === 0) {
+      toast("批量裁剪需要先把文件加入队列", "warn");
+      return;
+    }
     await runBatch();
   } else {
+    if (!$("inputPath").value) {
+      toast(batchQueue.length > 0
+        ? "当前是单文件模式：请先选择文件；要处理队列请切换到「批量裁剪」"
+        : "请先选择输入文件", "warn");
+      return;
+    }
     await runSingle();
   }
 }
@@ -1814,7 +1861,7 @@ async function runBatch(opts) {
     const item = batchQueue[i];
     if (resume && isTerminalStatus(item.status)) continue;   // 已结束的项直接跳过
 
-    const outPath = computeOutputPath(item.path);
+    const outPath = computeOutputPath(item.path, "batch");
     let taskId = null;
 
     if (resume && item.status === "running") {

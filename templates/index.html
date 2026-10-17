@@ -96,43 +96,57 @@
       <span id="clipEndTip">--:--:--</span>
     </div>
 
-    <div class="clip-section-label">单文件精确剪辑（选文件时生效）</div>
+    <div class="clip-section-label">剪辑模式（切换后时间输入规则随之变化）</div>
 
-    <div class="clip-row" style="margin-top:10px">
-      <div class="clip-label">起始时间：</div>
-      <div class="input-with-btn">
-        <input type="text" id="startTime" value="00:00:00" placeholder="00:00:00">
-        <button type="button" onclick="setStartFromPlayer()">当前时间</button>
-      </div>
+    <div class="clip-mode">
+      <label class="clip-mode-opt">
+        <input type="radio" name="clipMode" value="single" checked>
+        <span>单文件精确剪辑</span>
+      </label>
+      <label class="clip-mode-opt">
+        <input type="radio" name="clipMode" value="batch">
+        <span>批量裁剪（队列全部文件）</span>
+      </label>
     </div>
 
-    <div class="clip-row" style="margin-top:8px">
-      <div class="clip-label">结束时间：</div>
-      <div class="input-with-btn">
-        <input type="text" id="endTime" placeholder="到结尾">
-        <button type="button" onclick="setEndFromPlayer()">当前时间</button>
+    <div id="singleClipBox">
+      <div class="clip-row" style="margin-top:10px">
+        <div class="clip-label">起始时间：</div>
+        <div class="input-with-btn">
+          <input type="text" id="startTime" value="00:00:00" placeholder="00:00:00">
+          <button type="button" onclick="setStartFromPlayer()">当前时间</button>
+        </div>
       </div>
+
+      <div class="clip-row" style="margin-top:8px">
+        <div class="clip-label">结束时间：</div>
+        <div class="input-with-btn">
+          <input type="text" id="endTime" placeholder="到结尾">
+          <button type="button" onclick="setEndFromPlayer()">当前时间</button>
+        </div>
+      </div>
+
+      <div class="hint" id="durationHint" style="margin-top:8px">剪辑时长：--</div>
     </div>
 
-    <div class="hint" id="durationHint" style="margin-top:8px">剪辑时长：--</div>
-
-    <div class="batch-clip-section">
-      <div class="batch-clip-header">
-        <span class="batch-clip-title">批量裁剪</span>
-        <span class="batch-clip-hint">仅批量处理时生效 · 常用去片头片尾</span>
-      </div>
-      <div class="row">
-        <div class="form-group">
-          <label>片头裁剪</label>
+    <div id="batchClipBox" style="display:none">
+      <div class="clip-row" style="margin-top:10px">
+        <div class="clip-label">片头裁剪：</div>
+        <div class="input-with-btn">
           <input type="text" id="headTrim" value="00:00:00" placeholder="如 00:00:30">
-          <div class="hint">从每个文件开头去掉这段时长</div>
-        </div>
-        <div class="form-group">
-          <label>片尾裁剪</label>
-          <input type="text" id="tailTrim" value="00:00:00" placeholder="如 00:01:00">
-          <div class="hint">从每个文件结尾去掉这段时长</div>
+          <button type="button" onclick="resetTrim('headTrim')">清零</button>
         </div>
       </div>
+
+      <div class="clip-row" style="margin-top:8px">
+        <div class="clip-label">片尾裁剪：</div>
+        <div class="input-with-btn">
+          <input type="text" id="tailTrim" value="00:00:00" placeholder="如 00:01:00">
+          <button type="button" onclick="resetTrim('tailTrim')">清零</button>
+        </div>
+      </div>
+
+      <div class="hint" style="margin-top:8px">片头 / 片尾为相对时长，从每个文件开头 / 结尾去掉</div>
     </div>
 
     <h2 style="margin-top:18px">转码参数</h2>
