@@ -38,6 +38,7 @@
     <div class="queue-header">
       <h2 style="margin:0">批量队列 <span id="queueCount" class="queue-count">0</span></h2>
       <div class="queue-header-btns">
+        <button class="queue-btn" onclick="retryFailed()" title="把失败/中止的项目重置为待处理">重试失败</button>
         <button class="queue-btn" onclick="clearCompleted()" title="清空已完成">清完成</button>
         <button class="queue-btn danger" onclick="clearQueue()" title="清空全部">清空</button>
       </div>
@@ -246,12 +247,14 @@
     <div class="action-row">
       <button class="primary" id="submitBtn" onclick="submitTask()">开始转码</button>
       <button class="stop-btn" id="stopBtn" onclick="stopTask()" style="display:none;">中止</button>
+      <button class="dir-btn" id="openDirBtn" onclick="openOutputDir()" style="display:none;" title="在左侧文件浏览器中打开输出目录">📂 输出目录</button>
     </div>
 
     <div class="progress-wrap" id="progressWrap">
       <div class="progress-bar"><div id="progressFill"></div></div>
       <div class="progress-text">
         <span id="progressPct">0%</span>
+        <span id="progressInfo"></span>
         <span id="taskState" class="tag-status s-pending">pending</span>
       </div>
     </div>
@@ -259,6 +262,8 @@
     <div class="log-box" id="logBox"></div>
   </div>
 </div>
+
+<div class="toast-box" id="toastBox"></div>
 
 <script>
   window.MEDIA_DIR = "{{ media_dir }}";

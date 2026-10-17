@@ -17,6 +17,68 @@ let batchDone = 0;
 
 const FAV_KEY = "ffmpeg_web_favorites";
 const OUT_DIR_KEY = "ffmpeg_web_output_dirs";
+const SETTINGS_KEY = "ffmpeg_web_settings_v1";
+
+const SETTING_IDS = ["platform", "format", "qualityMode", "qualityValue", "bitrate",
+                     "preset", "scale", "acodec", "abitrate", "extra",
+                     "headTrim", "tailTrim"];
+
+const TASK_STATE_TEXT = {
+  pending: "排队中",
+  running: "转码中",
+  completed: "完成",
+  failed: "失败",
+  cancelled: "已中止",
+};
+
+// ==================== Toast 提示 ====================
+function toast(msg, type) {
+  const box = document.getElementById("toastBox");
+  if (!box) return;
+  const el = document.createElement("div");
+  el.className = "toast" + (type ? " toast-" + type : "");
+  el.textContent = msg;
+  box.appendChild(el);
+  setTimeout(() => {
+    el.classList.add("toast-out");
+    setTimeout(() => el.remove(), 300);
+  }, 3600);
+}
+
+// ==================== 进度显示（含速度 / 剩余时间） ====================
+function formatEta(sec) {
+  sec = Math.round(sec);
+  if (!isFinite(sec) || sec <= 0) return "";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  if (m > 0) return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+
+function updateProgressUI(t) {
+  document.getElementById("progressFill").style.width = (t.progress || 0) + "%";
+  document.getElementById("progressPct").textContent = (t.progress || 0).toFixed(1) + "%";
+
+  const infoEl = document.getElementById("progressInfo");
+  if (infoEl) {
+    const parts = [];
+    if (t.status === "running") {
+      if (t.speed) parts.push(t.speed);
+      if (t.eta > 0) parts.push("剩余 " + formatEta(t.eta));
+    }
+    infoEl.textContent = parts.join(" · ");
+  }
+
+  const stateEl = document.getElementById("taskState");
+  stateEl.textContent = TASK_STATE_TEXT[t.status] || t.status;
+  stateEl.className = "tag-status s-" + t.status;
+
+  if (t.log) {
+    const box = document.getElementById("logBox");
+    box.textContent = t.log;
+    box.scrollTop = box.scrollHeight;
+  }
+}
 
 // ==================== 路径工具 ====================
 function detectSep(path) {
@@ -60,8 +122,22 @@ fetch("/api/ffmpeg_check").then(r => r.json()).then(d => {
   availableEncoders = d.encoders || {};
   vaapiDeviceOk = !!d.vaapi_device;
   updatePlatformOptions();
-  onPlatformChange();
+  ensurePlatformValid();
+  onPlatformChange(true);  // 保留已保存/已选择的 preset
 });
+
+// 已保存的平台如果在本机不可用，自动回退（优先软件编码，其次智能/复制）
+function ensurePlatformValid() {
+  const sel = document.getElementById("platform");
+  const current = sel.options[sel.selectedIndex];
+  if (current && !current.disabled) return;
+  for (const val of ["software", "smart", "copy"]) {
+    const opt = Array.from(sel.options).find(o => o.value === val && !o.disabled);
+    if (opt) { sel.value = val; return; }
+  }
+  const fallback = Array.from(sel.options).find(o => !o.disabled);
+  if (fallback) sel.value = fallback.value;
+}
 
 function updatePlatformOptions() {
   const platformEncoders = {
@@ -90,7 +166,8 @@ function updatePlatformOptions() {
 }
 
 // ==================== 转码平台切换 ====================
-function onPlatformChange() {
+// keepPreset=true 时不重置 preset（用于页面加载后重新校验的调用）
+function onPlatformChange(keepPreset) {
   const platform = document.getElementById("platform").value;
   const formatSelect = document.getElementById("format");
   const qualityLabel = document.getElementById("qualityLabel");
@@ -123,7 +200,7 @@ function onPlatformChange() {
     formatSelect.disabled = true;
     qualityModeSel.disabled = true;
     document.getElementById("bitrateGroup").style.display = "none";
-    platformHint.textContent = "只做剪切/封装，不重新编码，速度极快";
+    platformHint.textContent = "只做剪切/封装，速度极快；copy 按关键帧对齐，剪辑起点可能有几秒偏差，需要精确请改用转码";
     if (!outputManuallyEdited) updateOutputPath();
     return;
   }
@@ -157,7 +234,7 @@ function onPlatformChange() {
     qualityLabel.textContent = "CRF 质量";
     qualityHint.textContent = "越小越好，18-28 常用";
     presetLabel.textContent = "Preset";
-    presetSelect.value = "medium";
+    if (!keepPreset) presetSelect.value = "medium";
     enablePresets(["ultrafast", "fast", "medium", "slow", "veryslow"]);
     formatSelect.querySelector('option[value="av1"]').disabled = !availableEncoders["libsvtav1"];
     platformHint.textContent = "CPU 编码，速度慢但画质和压缩率最好";
@@ -165,7 +242,7 @@ function onPlatformChange() {
     qualityLabel.textContent = "CQ 质量";
     qualityHint.textContent = "NVENC 恒定质量，推荐 20-28";
     presetLabel.textContent = "Preset (p1-p7)";
-    presetSelect.value = "p4";
+    if (!keepPreset) presetSelect.value = "p4";
     enablePresets(["p1", "p2", "p3", "p4", "p5", "p6", "p7"]);
     formatSelect.querySelector('option[value="av1"]').disabled = !availableEncoders["av1_nvenc"];
     platformHint.textContent = "NVIDIA 显卡硬件编码，速度极快";
@@ -173,7 +250,7 @@ function onPlatformChange() {
     qualityLabel.textContent = "ICQ 质量";
     qualityHint.textContent = "QSV 智能质量，推荐 22-28";
     presetLabel.textContent = "Preset";
-    presetSelect.value = "medium";
+    if (!keepPreset) presetSelect.value = "medium";
     enablePresets(["veryfast", "faster", "fast", "medium", "slow", "slower"]);
     formatSelect.querySelector('option[value="av1"]').disabled = !availableEncoders["av1_qsv"];
     platformHint.textContent = "Intel 核显硬件编码，低功耗";
@@ -181,7 +258,7 @@ function onPlatformChange() {
     qualityLabel.textContent = "QP 质量";
     qualityHint.textContent = "AMF 恒定 QP，推荐 22-26";
     presetLabel.textContent = "Preset";
-    presetSelect.value = "balanced";
+    if (!keepPreset) presetSelect.value = "balanced";
     enablePresets(["speed", "balanced", "quality"]);
     formatSelect.querySelector('option[value="av1"]').disabled = true;
     if (formatSelect.value === "av1") formatSelect.value = "h264";
@@ -190,10 +267,9 @@ function onPlatformChange() {
     qualityLabel.textContent = "QP 质量";
     qualityHint.textContent = "VAAPI 恒定 QP，推荐 22-26";
     presetLabel.textContent = "Preset";
-    presetSelect.value = "medium";
-    enablePresets(["ultrafast", "fast", "medium", "slow", "veryslow"]);
+    presetSelect.disabled = true;  // VAAPI 没有 preset 概念
     formatSelect.querySelector('option[value="av1"]').disabled = !availableEncoders["av1_vaapi"];
-    platformHint.textContent = "Linux 通用硬件加速接口";
+    platformHint.textContent = "Linux 通用硬件加速接口（无 preset 设置）";
   }
 
   onQualityModeChange();
@@ -242,6 +318,48 @@ function onQualityModeChange() {
     qv.disabled = false;
     br.disabled = true;
   }
+}
+
+// ==================== 参数记忆（localStorage） ====================
+function saveSettings() {
+  const data = {};
+  SETTING_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) data[id] = el.value;
+  });
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+function loadSettings() {
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") || {}; }
+  catch (e) { data = {}; }
+
+  const platformSel = document.getElementById("platform");
+  if (data.platform && Array.from(platformSel.options).some(o => o.value === data.platform)) {
+    platformSel.value = data.platform;
+  }
+  onPlatformChange();
+
+  ["format", "qualityMode", "qualityValue", "bitrate", "preset",
+   "scale", "acodec", "abitrate", "extra", "headTrim", "tailTrim"].forEach(id => {
+    if (data[id] == null) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (el.tagName === "SELECT") {
+      const opt = Array.from(el.options).find(o => o.value === data[id]);
+      if (!opt || opt.disabled) return;
+    }
+    el.value = data[id];
+  });
+
+  onQualityModeChange();
+
+  SETTING_IDS.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    ["change", "input"].forEach(ev => el.addEventListener(ev, saveSettings));
+  });
 }
 
 // ==================== 智能推荐 ====================
@@ -429,6 +547,7 @@ function applyRecommendation(mode) {
   document.getElementById("preset").value = preset;
 
   if (!outputManuallyEdited) updateOutputPath();
+  saveSettings();
 
   const btn = (mode === "gpu")
     ? document.getElementById("applyGpuBtn")
@@ -557,11 +676,16 @@ function renderQueue() {
       <span class="q-status-icon">${st.icon}</span>
       <div class="q-info">
         <span class="q-name"></span>
-        <span class="q-status-text">${st.text}${item.error ? " · " + item.error.slice(0, 40) : ""}</span>
+        <span class="q-status-text"></span>
       </div>
       <button class="q-remove" title="移除">×</button>
     `;
     li.querySelector(".q-name").textContent = item.name;
+
+    const statusParts = [st.text];
+    if (item.outName) statusParts.push("→ " + item.outName);
+    if (item.error) statusParts.push("错误: " + String(item.error).slice(0, 40));
+    li.querySelector(".q-status-text").textContent = statusParts.join(" · ");
 
     li.querySelector(".q-remove").onclick = (e) => {
       e.stopPropagation();
@@ -608,7 +732,7 @@ function addToQueue(path, name) {
 
 function removeFromQueue(idx) {
   if (isBatchRunning) {
-    alert("批量处理中，无法移除队列项");
+    toast("批量处理中，无法移除队列项", "warn");
     return;
   }
   batchQueue.splice(idx, 1);
@@ -619,7 +743,7 @@ function removeFromQueue(idx) {
 
 function clearQueue() {
   if (isBatchRunning) {
-    alert("批量处理中，无法清空队列");
+    toast("批量处理中，无法清空队列", "warn");
     return;
   }
   if (batchQueue.length === 0) return;
@@ -633,17 +757,41 @@ function clearQueue() {
 
 function clearCompleted() {
   if (isBatchRunning) {
-    alert("批量处理中，无法清空队列");
+    toast("批量处理中，无法清空队列", "warn");
     return;
   }
   const before = batchQueue.length;
   batchQueue = batchQueue.filter(it => it.status === "pending" || it.status === "running");
   if (batchQueue.length === before) {
-    alert("没有已完成的项目");
+    toast("没有已完成的项目", "warn");
     return;
   }
   renderQueue();
   refreshFileListAddButtons();
+}
+
+// 把失败 / 中止的项目重置为待处理，便于一键重跑
+function retryFailed() {
+  if (isBatchRunning) {
+    toast("批量处理中，无法重试", "warn");
+    return;
+  }
+  let n = 0;
+  batchQueue.forEach(it => {
+    if (it.status === "failed" || it.status === "cancelled") {
+      it.status = "pending";
+      it.error = "";
+      it.taskId = null;
+      it.outName = "";
+      n++;
+    }
+  });
+  if (!n) {
+    toast("没有失败或中止的项目", "warn");
+    return;
+  }
+  renderQueue();
+  toast(`已把 ${n} 个项目重置为待处理`, "ok");
 }
 
 function refreshFileListAddButtons() {
@@ -757,7 +905,7 @@ function renderFavorites() {
 function addCurrentToFavorites() {
   if (!currentDir) return;
   const list = getFavorites();
-  if (list.some(f => f.path === currentDir)) { alert("这个目录已经在收藏夹里了"); return; }
+  if (list.some(f => f.path === currentDir)) { toast("这个目录已经在收藏夹里了", "warn"); return; }
   const segments = currentDir.split(/[\/\\]/).filter(Boolean);
   const name = segments.length > 0 ? segments[segments.length - 1] : currentDir;
   list.push({ name, path: currentDir });
@@ -805,11 +953,11 @@ function renderOutputDirs() {
 }
 function addCurrentOutputDir() {
   const outPath = document.getElementById("outputPath").value.trim();
-  if (!outPath) { alert("输出文件路径为空"); return; }
+  if (!outPath) { toast("输出文件路径为空", "warn"); return; }
   const { dir } = splitPath(outPath);
-  if (!dir) { alert("无法解析目录"); return; }
+  if (!dir) { toast("无法解析目录", "warn"); return; }
   const list = getOutputDirs();
-  if (list.some(f => f.path === dir)) { alert("这个目录已经在输出目录列表里了"); return; }
+  if (list.some(f => f.path === dir)) { toast("这个目录已经在输出目录列表里了", "warn"); return; }
   const segments = dir.split(/[\/\\]/).filter(Boolean);
   const name = segments.length > 0 ? segments[segments.length - 1] : dir;
   list.push({ name, path: dir });
@@ -825,7 +973,7 @@ function removeOutputDir(idx) {
 
 function applyOutputDir(newDir) {
   const inputPath = document.getElementById("inputPath").value.trim();
-  if (!inputPath) { alert("请先选择输入文件"); return; }
+  if (!inputPath) { toast("请先选择输入文件", "warn"); return; }
 
   const { dir: inputDir, base, ext } = splitPath(inputPath);
   const norm = (p) => p.replace(/[\/\\]+$/, "").replace(/\\/g, "/").toLowerCase();
@@ -940,7 +1088,7 @@ async function loadPath(path) {
   try {
     const r = await fetch("/api/browse?path=" + encodeURIComponent(path));
     const d = await r.json();
-    if (d.error) { alert(d.error); return; }
+    if (d.error) { toast(d.error, "error"); return; }
     currentDir = d.path;
     document.getElementById("pathInput").value = d.path;
 
@@ -999,7 +1147,7 @@ async function loadPath(path) {
       ul.appendChild(li);
     });
   } catch (e) {
-    alert("加载失败: " + e);
+    toast("加载失败: " + e, "error");
   }
 }
 
@@ -1023,6 +1171,9 @@ async function previewFile(path) {
     box.style.display = "block";
     box.innerHTML = `<b style="color:#ff6b6b">读取视频信息失败：</b>
       <span style="color:#ccc">${d.error}</span>`;
+    // 清掉上一个文件的智能推荐，避免误导
+    lastRecommendation = null;
+    document.getElementById("recommendBox").style.display = "none";
     return;
   }
 
@@ -1055,6 +1206,27 @@ async function selectFile(path) {
 }
 
 // ==================== 提交 / 中止 ====================
+// 提交转码请求；输出文件已存在（409）时弹窗确认后带 overwrite 重试
+async function postTranscode(payload) {
+  const send = (body) => fetch("/api/transcode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  let r = await send(payload);
+  if (r.status === 409) {
+    const d = await r.json();
+    if (d.exists && confirm(`输出文件已存在：\n${payload.output}\n\n是否覆盖？`)) {
+      payload.overwrite = true;
+      r = await send(payload);
+    } else {
+      return { error: "输出文件已存在，已取消" };
+    }
+  }
+  return await r.json();
+}
+
 function waitForTask(taskId) {
   return new Promise((resolve) => {
     const check = async () => {
@@ -1064,18 +1236,7 @@ function waitForTask(taskId) {
         if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
           resolve(t);
         } else {
-          if (taskId === currentTaskId) {
-            document.getElementById("progressFill").style.width = (t.progress || 0) + "%";
-            document.getElementById("progressPct").textContent = (t.progress || 0).toFixed(1) + "%";
-            const stateEl = document.getElementById("taskState");
-            stateEl.textContent = t.status;
-            stateEl.className = "tag-status s-" + t.status;
-            if (t.log) {
-              const box = document.getElementById("logBox");
-              box.textContent = t.log;
-              box.scrollTop = box.scrollHeight;
-            }
-          }
+          if (taskId === currentTaskId) updateProgressUI(t);
           setTimeout(check, 800);
         }
       } catch (e) {
@@ -1105,7 +1266,7 @@ async function runSingle() {
     let srcInfo = currentSrcInfo;
     if (!srcInfo) {
       const inputPath = document.getElementById("inputPath").value;
-      if (!inputPath) { alert("请先选择输入文件"); return; }
+      if (!inputPath) { toast("请先选择输入文件", "warn"); return; }
       const r = await fetch("/api/info?path=" + encodeURIComponent(inputPath));
       srcInfo = await r.json();
     }
@@ -1147,23 +1308,19 @@ async function runSingle() {
     };
   }
 
-  if (!payload.input) { alert("请先选择输入文件"); return; }
-  if (!payload.output) { alert("请填写输出文件路径"); return; }
+  if (!payload.input) { toast("请先选择输入文件", "warn"); return; }
+  if (!payload.output) { toast("请填写输出文件路径", "warn"); return; }
 
   const btn = document.getElementById("submitBtn");
   const stopBtn = document.getElementById("stopBtn");
   btn.disabled = true;
   btn.textContent = "提交中…";
+  document.getElementById("openDirBtn").style.display = "none";
 
   try {
-    const r = await fetch("/api/transcode", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const d = await r.json();
+    const d = await postTranscode(payload);
     if (d.error) {
-      alert(d.error);
+      toast(d.error, "error");
       btn.disabled = false;
       btn.textContent = "开始转码";
       return;
@@ -1180,7 +1337,7 @@ async function runSingle() {
     btn.textContent = "运行中…";
     startPolling();
   } catch (e) {
-    alert("提交失败: " + e);
+    toast("提交失败: " + e, "error");
     btn.disabled = false;
     btn.textContent = "开始转码";
   }
@@ -1197,6 +1354,7 @@ async function runBatch() {
     item.status = "pending";
     item.taskId = null;
     item.error = "";
+    item.outName = "";
   });
   renderQueue();
 
@@ -1207,6 +1365,7 @@ async function runBatch() {
   stopBtn.disabled = false;
   document.getElementById("progressWrap").style.display = "block";
   document.getElementById("logBox").style.display = "block";
+  document.getElementById("openDirBtn").style.display = "none";
 
   const platform = document.getElementById("platform").value;
   let successCount = 0;
@@ -1223,10 +1382,10 @@ async function runBatch() {
     }
 
     const item = batchQueue[i];
-    updateQueueItem(i, { status: "running" });
+    const outPath = computeOutputPath(item.path);
+    updateQueueItem(i, { status: "running", outName: splitPath(outPath).filename });
     btn.textContent = `批量 ${i + 1}/${batchQueue.length}`;
 
-    const outPath = computeOutputPath(item.path);
     let payload;
 
     if (platform === "smart") {
@@ -1261,12 +1420,7 @@ async function runBatch() {
     }
 
     try {
-      const r = await fetch("/api/transcode", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const d = await r.json();
+      const d = await postTranscode(payload);
       if (d.error) {
         updateQueueItem(i, { status: "failed", error: d.error });
         failedCount++;
@@ -1313,6 +1467,14 @@ async function runBatch() {
   btn.textContent = `批量完成（成功 ${successCount} / 失败 ${failedCount}）`;
   setTimeout(() => { btn.textContent = "开始转码"; }, 3000);
   renderQueue();
+
+  // 刷新文件列表（显示新生成的文件），并提供打开输出目录入口
+  loadPath(currentDir);
+  if (successCount > 0) {
+    document.getElementById("openDirBtn").style.display = "inline-block";
+  }
+  toast(`批量完成：成功 ${successCount} / 失败 ${failedCount}`,
+        failedCount > 0 ? "warn" : "ok");
 }
 
 async function stopTask() {
@@ -1343,19 +1505,7 @@ function startPolling() {
     if (!currentTaskId) return;
     const r = await fetch("/api/task/" + currentTaskId);
     const t = await r.json();
-
-    document.getElementById("progressFill").style.width = (t.progress || 0) + "%";
-    document.getElementById("progressPct").textContent = (t.progress || 0).toFixed(1) + "%";
-
-    const stateEl = document.getElementById("taskState");
-    stateEl.textContent = t.status;
-    stateEl.className = "tag-status s-" + t.status;
-
-    if (t.log) {
-      const box = document.getElementById("logBox");
-      box.textContent = t.log;
-      box.scrollTop = box.scrollHeight;
-    }
+    updateProgressUI(t);
 
     if (t.status === "completed" || t.status === "failed" || t.status === "cancelled") {
       clearInterval(pollTimer);
@@ -1365,9 +1515,16 @@ function startPolling() {
       stopBtn.style.display = "none";
       stopBtn.textContent = "中止";
 
-      if (t.status === "completed") btn.textContent = "✅ 完成，再来一次";
-      else if (t.status === "cancelled") btn.textContent = "🚫 已中止，重新开始";
-      else btn.textContent = "❌ 失败，重试";
+      if (t.status === "completed") {
+        btn.textContent = "✅ 完成，再来一次";
+        loadPath(currentDir);  // 刷新列表，显示新生成的文件
+        document.getElementById("openDirBtn").style.display = "inline-block";
+      } else if (t.status === "cancelled") {
+        btn.textContent = "🚫 已中止，重新开始";
+      } else {
+        btn.textContent = "❌ 失败，重试";
+        toast("任务失败：" + (t.error || "未知错误"), "error");
+      }
 
       if (t.error) {
         document.getElementById("logBox").textContent += "\n\n[提示] " + t.error;
@@ -1376,7 +1533,16 @@ function startPolling() {
   }, 800);
 }
 
+// 打开当前输出文件所在目录（在左侧文件浏览器中定位）
+function openOutputDir() {
+  const out = document.getElementById("outputPath").value.trim();
+  if (!out) { toast("还没有输出路径", "warn"); return; }
+  const { dir } = splitPath(out);
+  if (dir) loadPath(dir);
+}
+
 // ==================== 初始化 ====================
+loadSettings();
 loadPath(currentDir);
 updateClipUI();
 renderFavorites();

@@ -433,6 +433,19 @@ button.stop-btn {
 button.stop-btn:hover { background: #c03030; }
 button.stop-btn:disabled { background: #3a4048; cursor: not-allowed; color: #777; }
 
+button.dir-btn {
+  padding: 11px 14px;
+  background: #2f3a48;
+  color: #cfe3ff;
+  border: none;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+button.dir-btn:hover { background: #3b4a5c; }
+
 /* ===== 智能推荐 ===== */
 .recommend-box {
   display: flex;
@@ -504,6 +517,16 @@ button.stop-btn:disabled { background: #3a4048; cursor: not-allowed; color: #777
   margin-top: 6px;
   display: flex;
   justify-content: space-between;
+  gap: 8px;
+}
+#progressInfo {
+  flex: 1;
+  text-align: center;
+  color: #6fb3ff;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .log-box {
@@ -652,3 +675,33 @@ button.stop-btn:disabled { background: #3a4048; cursor: not-allowed; color: #777
   color: #666;
   font-style: italic;
 }
+
+/* ===== Toast 提示 ===== */
+.toast-box {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 9999;
+  max-width: 340px;
+}
+.toast {
+  background: #2a2e35;
+  border: 1px solid #3a4048;
+  border-left: 3px solid #8ab4f8;
+  color: #ddd;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-radius: 5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  white-space: pre-wrap;
+  word-break: break-all;
+  transition: opacity 0.3s, transform 0.3s;
+}
+.toast-warn { border-left-color: #d9a021; }
+.toast-error { border-left-color: #c03030; }
+.toast-ok { border-left-color: #1e7a3a; }
+.toast-out { opacity: 0; transform: translateY(6px); }

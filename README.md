@@ -1,4 +1,4 @@
-# 🎬 FFmpeg Web 转码工具
+# FFF
 
 一个基于 Flask + FFmpeg 的网页版视频剪辑 / 转码工具。支持本机与局域网访问，可对 NAS 上的视频文件直接操作，无需上传。
 
@@ -36,6 +36,9 @@
 ```
 ffmpeg-web/
 ├── app.py                 # Flask 后端
+├── requirements.txt       # Python 依赖
+├── run.ps1                # Windows 一键启动脚本
+├── run.sh                 # Linux/macOS 一键启动脚本
 ├── templates/
 │   └── index.html         # 页面结构
 ├── static/
@@ -50,6 +53,33 @@ ffmpeg-web/
 ---
 
 ## 🚀 部署步骤
+
+### ⚡ 一键启动（推荐）
+
+脚本会自动完成：查找 Python → 创建 `.venv` 虚拟环境 → 安装依赖（首次需联网）→ 检查 ffmpeg → 启动服务。
+
+**Windows（PowerShell）**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+
+# 可选参数：指定端口 / 默认目录
+powershell -ExecutionPolicy Bypass -File .\run.ps1 -Port 8080 -MediaDir "D:\Videos"
+```
+
+**Linux / macOS**
+
+```bash
+chmod +x run.sh    # 首次
+./run.sh
+
+# 或指定端口
+./run.sh 8080
+```
+
+---
+
+### 手动部署（以下为手动步骤）
 
 ### 前置：准备 FFmpeg
 
@@ -147,6 +177,7 @@ python app.py
 - `PORT=5000`
 - `MEDIA_DIR`：Windows 为用户主目录，Linux 为 `/`
 - `VAAPI_DEVICE=/dev/dri/renderD128`
+- `MAX_CONCURRENT_TASKS=1`：同时运行的转码任务数上限，超出的任务自动排队
 
 ---
 
@@ -208,7 +239,7 @@ nssm start FFmpegWeb
    - copy 剪辑：`video_cut.mp4`
    - H.265 转码：`video_h265.mp4`
    - 剪辑+转码：`video_cut_h265.mp4`
-5. **点开始转码**：实时进度、日志、中止按钮
+5. **点开始转码**：实时进度（含速度与剩余时间估计）、日志、中止按钮；完成后自动刷新文件列表，可点「📂 输出目录」定位新文件
 
 ### 批量处理（推荐场景：批量去片头片尾）
 
@@ -217,7 +248,7 @@ nssm start FFmpegWeb
    - 片头裁剪：如 `00:00:30`
    - 片尾裁剪：如 `00:01:00`
 3. **选参数**：转码方式推荐用 **🧠 智能选择**
-4. **点开始转码**：队列里的文件会**顺序处理**，每个文件独立计算起止时间
+4. **点开始转码**：队列里的文件会**顺序处理**，每个文件独立计算起止时间（失败/中止的项可点「重试失败」重置后重跑）
 
 ### 智能选择的工作方式
 
@@ -263,6 +294,7 @@ nssm start FFmpegWeb
 - **NVENC**：`p1` ~ `p7`（数字越大质量越好）
 - **QSV**：`veryfast` ~ `slower`
 - **AMF**：`speed` / `balanced` / `quality`
+- **VAAPI**：无 preset 概念（界面中不可选）
 
 ### 音频
 
@@ -333,11 +365,11 @@ ffmpeg -hide_banner -encoders | grep -E "nvenc|qsv|amf|vaapi"
 
 ### Q5：输出文件没变化 / 提示"输出路径不能和输入相同"
 
-检查输出路径是否和源文件在同一位置且同名。程序已做保护，避免覆盖源文件。
+检查输出路径是否和源文件在同一位置且同名。程序已做保护，避免覆盖源文件。如果输出文件已存在，会弹窗让你确认是否覆盖。
 
 ### Q6：批量处理能并行吗？
 
-目前是**顺序处理**（一个完成再下一个），避免同时占用过多 CPU / GPU。如果需要并行，可以修改 `app.js` 的 `runBatch` 逻辑。
+前端批量任务是**顺序处理**（一个完成再下一个），避免同时占用过多 CPU / GPU。服务端同时运行的任务数由 `MAX_CONCURRENT_TASKS` 环境变量控制（默认 1，多个来源的提交会自动排队，任务状态显示为「排队中」）。
 
 ### Q7：CRF 22 转出来很小，正常吗？
 

@@ -1,3 +1,4 @@
+import atexit
 import os
 import re
 import json
@@ -5,6 +6,7 @@ import shutil
 import platform
 import subprocess
 import threading
+import time
 import uuid
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
@@ -46,15 +48,110 @@ tasks_lock = threading.Lock()
 running_processes = {}
 process_lock = threading.Lock()
 
+# 同时运行的 FFmpeg 任务数上限（超出的任务先排队），可用环境变量调整
+try:
+    MAX_CONCURRENT_TASKS = max(1, int(os.environ.get("MAX_CONCURRENT_TASKS", "1")))
+except ValueError:
+    MAX_CONCURRENT_TASKS = 1
+TASK_SEMAPHORE = threading.Semaphore(MAX_CONCURRENT_TASKS)
+
+# tasks 字典最多保留的记录数（防止长时间运行后内存持续增长）
+MAX_TASKS_KEPT = 200
+
+
+def _prune_tasks_locked():
+    """超出上限时清理最早的已结束任务（调用方需持有 tasks_lock）"""
+    overflow = len(tasks) - MAX_TASKS_KEPT
+    if overflow <= 0:
+        return
+    for tid in list(tasks.keys()):
+        if overflow <= 0:
+            break
+        if tasks[tid].get("status") not in ("pending", "running"):
+            del tasks[tid]
+            overflow -= 1
+
+
+def _kill_running_processes():
+    """进程退出时清理残留的 FFmpeg 子进程"""
+    with process_lock:
+        procs = list(running_processes.values())
+    for p in procs:
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
+atexit.register(_kill_running_processes)
+
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm",
               ".ts", ".m2ts", ".mpg", ".mpeg", ".vob", ".m4v", ".3gp", ".rmvb"}
 
-# ===== 容器音频兼容性表 =====
-# MP4 支持的音频编码
-MP4_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac", "opus"}
-# WebM 支持的音频编码
-WEBM_AUDIO_CODECS = {"opus", "vorbis"}
-# MKV 几乎支持所有，无需检查
+# ===== 容器兼容性表 =====
+# 扩展名 -> 允许的音频编码（MKV / AVI 等未列出的容器不做限制）
+CONTAINER_AUDIO_CODECS = {
+    "mp4": {"aac", "mp3", "ac3", "eac3", "alac", "opus"},
+    "m4v": {"aac", "mp3", "ac3", "eac3", "alac", "opus"},
+    "mov": {"aac", "mp3", "ac3", "eac3", "alac", "opus", "pcm_s16le"},
+    "webm": {"opus", "vorbis"},
+    "flv": {"aac", "mp3"},
+    "ts": {"aac", "mp3", "ac3", "eac3"},
+    "m2ts": {"aac", "mp3", "ac3", "eac3"},
+}
+
+# 扩展名 -> 允许的视频编码（用于 copy 模式的预检查）
+CONTAINER_VIDEO_CODECS = {
+    "mp4": {"h264", "hevc", "av1", "vp9", "mpeg4", "mpeg2video", "mjpeg"},
+    "m4v": {"h264", "hevc", "av1", "vp9", "mpeg4", "mpeg2video", "mjpeg"},
+    "mov": {"h264", "hevc", "av1", "vp9", "mpeg4", "mpeg2video", "mjpeg", "prores", "dnxhd"},
+    "webm": {"vp8", "vp9", "av1"},
+    "flv": {"h264", "flv1", "vp6", "vp6a", "vp6f", "h263"},
+    "ts": {"h264", "hevc", "mpeg2video", "mpeg1video", "av1"},
+    "m2ts": {"h264", "hevc", "mpeg2video", "mpeg1video", "av1"},
+}
+
+# 音频不兼容时自动切换的默认编码：扩展名 -> (编码器, 显示名)
+CONTAINER_FALLBACK_ACODEC = {
+    "mp4": ("aac", "AAC"),
+    "m4v": ("aac", "AAC"),
+    "mov": ("aac", "AAC"),
+    "webm": ("libopus", "Opus"),
+    "flv": ("aac", "AAC"),
+    "ts": ("aac", "AAC"),
+    "m2ts": ("aac", "AAC"),
+}
+
+# 这些容器支持 -movflags +faststart
+FASTSTART_EXTS = {"mp4", "m4v", "mov"}
+
+# 参数校验
+BITRATE_RE = re.compile(r"^\d+(\.\d+)?[kKmM]?$")
+SCALE_RE = re.compile(r"^-?\d+:-?\d+$")
+
+# preset 白名单（前端控件之外的输入一律回退默认值）
+VALID_PRESETS = {
+    "software": {"ultrafast", "superfast", "veryfast", "faster", "fast",
+                 "medium", "slow", "slower", "veryslow"},
+    "nvenc": {"p1", "p2", "p3", "p4", "p5", "p6", "p7"},
+    "qsv": {"veryfast", "faster", "fast", "medium", "slow", "slower"},
+    "amf": {"speed", "balanced", "quality"},
+}
+DEFAULT_PRESETS = {"software": "medium", "nvenc": "p4", "qsv": "medium", "amf": "balanced"}
+
+
+def output_ext(path):
+    """取输出文件扩展名（小写、不含点），没有扩展名返回空串"""
+    name = os.path.basename(path or "")
+    return name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+
+def same_file(a, b):
+    """比较两个路径是否指向同一文件（兼容 Windows 大小写 / 短路径 / 软链）"""
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except Exception:
+        return os.path.abspath(a) == os.path.abspath(b)
 
 
 def parse_time(t):
@@ -124,7 +221,18 @@ def get_source_audio_codec(src_info):
     return ""
 
 
-def ensure_audio_compatible(output_path, acodec, abitrate, src_info):
+def get_source_video_codec(src_info):
+    """从 ffprobe 结果里提取源视频编码名"""
+    try:
+        for s in src_info.get("streams", []):
+            if s.get("codec_type") == "video":
+                return (s.get("codec_name") or "").lower()
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_audio_compatible(out_ext, acodec, abitrate, src_info):
     """
     检查音频编码是否和目标容器兼容。
     如果用户选了 copy 但源编码不兼容，自动切换成对应容器的默认编码。
@@ -138,16 +246,34 @@ def ensure_audio_compatible(output_path, acodec, abitrate, src_info):
         # 没有音频轨，无所谓
         return acodec, abitrate, False, ""
 
-    out_ext = output_path.lower().rsplit(".", 1)[-1] if "." in output_path else ""
+    allowed = CONTAINER_AUDIO_CODECS.get(out_ext)
+    if not allowed or src_acodec in allowed:
+        # 未收录的容器（mkv/avi 等）通常都兼容
+        return acodec, abitrate, False, ""
 
-    if out_ext == "mp4" and src_acodec not in MP4_AUDIO_CODECS:
-        return "aac", (abitrate or "192k"), True, \
-               f"源音频 {src_acodec} 不能封装进 MP4，已自动改为 AAC 重编码"
-    if out_ext == "webm" and src_acodec not in WEBM_AUDIO_CODECS:
-        return "libopus", (abitrate or "128k"), True, \
-               f"源音频 {src_acodec} 不能封装进 WebM，已自动改为 Opus 重编码"
-    # MKV / 其他容器通常都兼容
-    return acodec, abitrate, False, ""
+    fallback = CONTAINER_FALLBACK_ACODEC.get(out_ext)
+    if not fallback:
+        return acodec, abitrate, False, ""
+
+    new_codec, label = fallback
+    default_br = "128k" if new_codec == "libopus" else "192k"
+    return new_codec, (abitrate or default_br), True, \
+           f"源音频 {src_acodec} 不能封装进 .{out_ext}，已自动改为 {label} 重编码"
+
+
+def check_copy_video_compat(out_ext, src_info):
+    """
+    copy 模式：检查源视频编码能否封装进目标容器。
+    返回错误信息字符串；兼容时返回 None。
+    """
+    allowed = CONTAINER_VIDEO_CODECS.get(out_ext)
+    if not allowed:
+        return None
+    src_vcodec = get_source_video_codec(src_info)
+    if not src_vcodec or src_vcodec in allowed:
+        return None
+    return (f"源视频编码 {src_vcodec.upper()} 无法封装进 .{out_ext} 容器，"
+            f"请改用转码，或把输出扩展名改成兼容的容器（如 .mkv）")
 
 
 def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
@@ -187,6 +313,7 @@ def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
             enc_args += ["-b:v", bitrate, "-maxrate", bitrate, "-bufsize", bitrate]
         else:
             enc_args += ["-global_quality", str(quality_value)]
+        enc_args += ["-preset", preset]
         if scale:
             vf.append(f"scale_qsv={scale}")
 
@@ -198,6 +325,7 @@ def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
             enc_args += ["-b:v", bitrate]
         else:
             enc_args += ["-rc", "cqp", "-qp_i", str(quality_value), "-qp_p", str(quality_value)]
+        enc_args += ["-quality", preset]
         if scale:
             vf.append(f"scale={scale}")
 
@@ -206,10 +334,11 @@ def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
         if not enc:
             return None, [], [], []
         pre += ["-vaapi_device", VAAPI_DEVICE]
+        # VAAPI 需要先转为 nv12 并上传到显卡，缩放要在上传之后
         vf.append("format=nv12")
+        vf.append("hwupload")
         if scale:
             vf.append(f"scale_vaapi={scale}")
-        vf.append("hwupload")
         enc_args += ["-b:v", bitrate] if use_bitrate else ["-qp", str(quality_value)]
 
     else:
@@ -218,75 +347,155 @@ def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
     return enc, pre, vf, enc_args
 
 
-def run_ffmpeg_task(task_id, cmd, duration=None):
+def _apply_progress(task_id, current, duration, state):
+    """根据当前输出时间更新任务进度 / 速度 / 剩余时间估计"""
+    progress = None
+    if duration and duration > 0 and current is not None:
+        progress = min(99.9, (current / duration) * 100)
+
+    eta = None
+    speed_num = state.get("speed_num") or 0.0
+    if duration and duration > 0 and current is not None and speed_num > 0:
+        eta = max(0.0, (duration - current) / speed_num)
+
     with tasks_lock:
-        tasks[task_id]["status"] = "running"
-        tasks[task_id]["start_time"] = datetime.now().isoformat()
+        task = tasks.get(task_id)
+        if task is None:
+            return
+        if progress is not None:
+            task["progress"] = round(progress, 2)
+        if state.get("speed"):
+            task["speed"] = state["speed"]
+        if eta is not None:
+            task["eta"] = round(eta, 1)
 
-    process = None
-    try:
-        creationflags = 0
-        if IS_WINDOWS:
-            creationflags = subprocess.CREATE_NO_WINDOW
 
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-            creationflags=creationflags,
-        )
+def _drain_stderr(process, task_id, log_lines, state, duration):
+    """后台线程：持续读取 FFmpeg stderr 作为日志（老版本 FFmpeg 的回退进度解析）"""
+    time_pattern = re.compile(rb"time=(\d+):(\d+):(\d+\.\d+)")
+    for raw in process.stderr:
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        log_lines.append(line)
+        if len(log_lines) > 300:
+            del log_lines[:-300]
 
-        with process_lock:
-            running_processes[task_id] = process
-
-        time_pattern = re.compile(rb"time=(\d+):(\d+):(\d+\.\d+)")
-        log_lines = []
-
-        for raw in iter(process.stderr.readline, b""):
-            line = raw.decode("utf-8", errors="replace").rstrip()
-            log_lines.append(line)
-            if len(log_lines) > 300:
-                log_lines = log_lines[-300:]
+        # 没有 -progress 输出时（极老版本 FFmpeg），回退解析 stderr 的 time=
+        if not state.get("seen") and duration and duration > 0:
             m = time_pattern.search(raw)
-            if m and duration and duration > 0:
+            if m:
                 h, mi, s = m.groups()
                 current = int(h) * 3600 + int(mi) * 60 + float(s)
-                progress = min(99.9, (current / duration) * 100)
-                with tasks_lock:
-                    tasks[task_id]["progress"] = round(progress, 2)
-                    tasks[task_id]["log"] = "\n".join(log_lines[-25:])
-            else:
-                with tasks_lock:
-                    tasks[task_id]["log"] = "\n".join(log_lines[-25:])
-
-        process.wait()
+                state["current"] = current
+                _apply_progress(task_id, current, duration, state)
 
         with tasks_lock:
-            cancelled = tasks[task_id].get("cancelled", False)
-            if cancelled:
-                tasks[task_id]["status"] = "cancelled"
-                tasks[task_id]["error"] = "用户已中止任务"
-            elif process.returncode == 0:
-                tasks[task_id]["status"] = "completed"
-                tasks[task_id]["progress"] = 100
-            else:
-                tasks[task_id]["status"] = "failed"
-                tasks[task_id]["error"] = f"FFmpeg 退出码: {process.returncode}"
-            tasks[task_id]["log"] = "\n".join(log_lines[-60:])
-            tasks[task_id]["end_time"] = datetime.now().isoformat()
+            task = tasks.get(task_id)
+            if task is not None:
+                task["log"] = "\n".join(log_lines[-25:])
 
-    except Exception as e:
+
+def run_ffmpeg_task(task_id, cmd, duration=None):
+    # 并发上限：超出的任务在这里排队等待（任务状态保持 pending）
+    with TASK_SEMAPHORE:
         with tasks_lock:
-            if tasks[task_id].get("cancelled"):
-                tasks[task_id]["status"] = "cancelled"
-                tasks[task_id]["error"] = "用户已中止任务"
-            else:
-                tasks[task_id]["status"] = "failed"
-                tasks[task_id]["error"] = str(e)
-    finally:
-        with process_lock:
-            running_processes.pop(task_id, None)
+            task = tasks.get(task_id)
+            if task is None:
+                return
+            if task.get("cancelled") or task["status"] == "cancelled":
+                task["status"] = "cancelled"
+                task["error"] = task.get("error") or "用户已中止任务"
+                task.setdefault("end_time", datetime.now().isoformat())
+                return
+            task["status"] = "running"
+            task["start_time"] = datetime.now().isoformat()
+
+        process = None
+        log_lines = []
+        state = {"seen": False, "current": None, "speed": "", "speed_num": 0.0}
+
+        try:
+            creationflags = 0
+            if IS_WINDOWS:
+                creationflags = subprocess.CREATE_NO_WINDOW
+
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,     # 供中止时发送 'q' 优雅退出
+                stdout=subprocess.PIPE,    # -progress pipe:1 输出
+                stderr=subprocess.PIPE,    # 日志
+                creationflags=creationflags,
+            )
+
+            with process_lock:
+                running_processes[task_id] = process
+
+            stderr_thread = threading.Thread(
+                target=_drain_stderr,
+                args=(process, task_id, log_lines, state, duration),
+                daemon=True,
+            )
+            stderr_thread.start()
+
+            # -progress pipe:1 输出 key=value 行，据此驱动进度 / 速度 / 剩余时间
+            for raw in process.stdout:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip()
+
+                if key == "out_time":
+                    state["seen"] = True
+                    state["current"] = parse_time(value)
+                    _apply_progress(task_id, state["current"], duration, state)
+                elif key in ("out_time_ms", "out_time_us"):
+                    if state.get("current") is None:
+                        try:
+                            state["current"] = float(value) / 1000000.0
+                            state["seen"] = True
+                            _apply_progress(task_id, state["current"], duration, state)
+                        except ValueError:
+                            pass
+                elif key == "speed":
+                    state["speed"] = "" if value in ("N/A", "") else value
+                    try:
+                        state["speed_num"] = float(value.rstrip("x"))
+                    except ValueError:
+                        state["speed_num"] = 0.0
+                    _apply_progress(task_id, state.get("current"), duration, state)
+
+            process.wait()
+            stderr_thread.join(timeout=5)
+
+            with tasks_lock:
+                cancelled = tasks[task_id].get("cancelled", False)
+                if cancelled:
+                    tasks[task_id]["status"] = "cancelled"
+                    tasks[task_id]["error"] = "用户已中止任务"
+                elif process.returncode == 0:
+                    tasks[task_id]["status"] = "completed"
+                    tasks[task_id]["progress"] = 100
+                else:
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = f"FFmpeg 退出码: {process.returncode}"
+                tasks[task_id]["log"] = "\n".join(log_lines[-60:])
+                tasks[task_id]["speed"] = ""
+                tasks[task_id]["eta"] = None
+                tasks[task_id]["end_time"] = datetime.now().isoformat()
+
+        except Exception as e:
+            with tasks_lock:
+                if tasks[task_id].get("cancelled"):
+                    tasks[task_id]["status"] = "cancelled"
+                    tasks[task_id]["error"] = "用户已中止任务"
+                else:
+                    tasks[task_id]["status"] = "failed"
+                    tasks[task_id]["error"] = str(e)
+                tasks[task_id]["speed"] = ""
+                tasks[task_id]["eta"] = None
+        finally:
+            with process_lock:
+                running_processes.pop(task_id, None)
 
 
 @app.route("/")
@@ -402,8 +611,32 @@ def transcode():
         return jsonify({"error": "输入文件不存在"}), 400
     if not output_path:
         return jsonify({"error": "请指定输出路径"}), 400
-    if os.path.abspath(input_path) == os.path.abspath(output_path):
+    if same_file(input_path, output_path):
         return jsonify({"error": "输出路径不能和输入相同"}), 400
+    if os.path.isdir(output_path):
+        return jsonify({"error": "输出路径是已存在的目录"}), 400
+
+    out_ext = output_ext(output_path)
+    if not out_ext:
+        return jsonify({"error": "输出文件缺少扩展名，请指定如 .mp4 / .mkv"}), 400
+
+    # 覆盖保护：前端确认后带 overwrite=true 再次提交
+    if os.path.exists(output_path) and not d.get("overwrite"):
+        return jsonify({"error": "输出文件已存在", "exists": True}), 409
+
+    # ===== 参数校验 =====
+    try:
+        quality_value = int(float(str(quality_value)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "质量值必须是数字"}), 400
+    quality_value = max(0, min(51, quality_value))
+
+    if bitrate and not BITRATE_RE.match(bitrate):
+        return jsonify({"error": "目标码率格式不正确，示例：5M / 8000k"}), 400
+    if scale and not SCALE_RE.match(scale):
+        return jsonify({"error": "缩放格式不正确，示例：1920:1080 或 -2:720"}), 400
+    if platform_name in VALID_PRESETS and preset not in VALID_PRESETS[platform_name]:
+        preset = DEFAULT_PRESETS[platform_name]
 
     out_dir = os.path.dirname(output_path)
     if out_dir:
@@ -433,12 +666,21 @@ def transcode():
         tail_sec = parse_time(tail_trim)
         end_sec = max(0.0, total_duration - tail_sec)
 
+    # ===== 容器兼容性检查 =====
+    if platform_name == "copy":
+        err = check_copy_video_compat(out_ext, src_info)
+        if err:
+            return jsonify({"error": err}), 400
+    elif out_ext == "webm" and fmt != "av1":
+        return jsonify({"error": "WebM 容器仅支持 VP8 / VP9 / AV1 视频，"
+                                 "请改输出扩展名（如 .mp4 / .mkv）或选择 AV1 编码"}), 400
+
     # ===== 音频兼容性检查 =====
     acodec, abitrate, auto_switched, audio_note = ensure_audio_compatible(
-        output_path, acodec, abitrate, src_info
+        out_ext, acodec, abitrate, src_info
     )
 
-    cmd = [FFMPEG, "-y", "-hide_banner"]
+    cmd = [FFMPEG, "-y", "-hide_banner", "-nostats", "-progress", "pipe:1"]
 
     pre_input, vf_list, enc_args = [], [], []
     enc = "copy"
@@ -472,7 +714,7 @@ def transcode():
     if extra:
         cmd += extra.split()
 
-    if output_path.lower().endswith(".mp4"):
+    if out_ext in FASTSTART_EXTS:
         cmd += ["-movflags", "+faststart"]
     cmd += [output_path]
 
@@ -484,11 +726,13 @@ def transcode():
 
     task_id = str(uuid.uuid4())
     with tasks_lock:
+        _prune_tasks_locked()
         tasks[task_id] = {
             "id": task_id, "status": "pending", "progress": 0,
             "input": input_path, "output": output_path,
             "cmd": " ".join(cmd), "log": "", "error": "",
             "cancelled": False,
+            "speed": "", "eta": None,
             "audio_note": audio_note if auto_switched else "",
         }
 
@@ -519,6 +763,11 @@ def stop_task(task_id):
         if task["status"] not in ("running", "pending"):
             return jsonify({"error": f"任务当前状态为 {task['status']}，无法中止"}), 400
         task["cancelled"] = True
+        if task["status"] == "pending":
+            # 还在排队 / 尚未拉起 FFmpeg，直接标记结束
+            task["status"] = "cancelled"
+            task["error"] = "用户已中止任务"
+            task["end_time"] = datetime.now().isoformat()
 
     with process_lock:
         process = running_processes.get(task_id)
@@ -527,22 +776,40 @@ def stop_task(task_id):
         return jsonify({"ok": True, "message": "任务尚未启动或已结束"})
 
     try:
-        process.terminate()
+        # 先发 'q' 让 FFmpeg 优雅退出（mp4 会正常写完文件尾）
         try:
-            process.wait(timeout=3)
+            if process.stdin:
+                process.stdin.write(b"q")
+                process.stdin.flush()
+        except Exception:
+            pass
+
+        try:
+            process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            process.kill()
+            process.terminate()
             try:
-                process.wait(timeout=2)
-            except Exception:
-                pass
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=2)
+                except Exception:
+                    pass
         return jsonify({"ok": True, "message": "已中止"})
     except Exception as e:
         return jsonify({"error": f"中止失败: {e}"}), 500
 
 
+_ffmpeg_check_cache = {"ts": 0.0, "data": None}
+
+
 @app.route("/api/ffmpeg_check")
 def ffmpeg_check():
+    # 60 秒内复用结果，避免每次刷新页面都重新探测
+    if _ffmpeg_check_cache["data"] is not None and time.time() - _ffmpeg_check_cache["ts"] < 60:
+        return jsonify(_ffmpeg_check_cache["data"])
+
     result = {
         "ok": False,
         "path": FFMPEG,
@@ -574,6 +841,8 @@ def ffmpeg_check():
                 encoders[enc_name] = True
         result["encoders"] = encoders
 
+    _ffmpeg_check_cache["ts"] = time.time()
+    _ffmpeg_check_cache["data"] = result
     return jsonify(result)
 
 
