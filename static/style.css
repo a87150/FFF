@@ -223,7 +223,6 @@ h2 {
   accent-color: #1a73e8;
   cursor: pointer;
 }
-.filelist li .icon { width: 16px; text-align: center; flex-shrink: 0; }
 .filelist li .name {
   flex: 1;
   overflow: hidden;
@@ -344,7 +343,6 @@ h2 {
   font-size: 13px;
 }
 .modal-list li:hover { background: #2a2e35; }
-.modal-list li .icon { width: 16px; text-align: center; flex-shrink: 0; }
 .modal-list li .name {
   flex: 1;
   overflow: hidden;

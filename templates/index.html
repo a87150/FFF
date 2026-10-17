@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>🎬 FFmpeg Web 转码工具</h1>
+  <h1>FFmpeg Web 转码工具</h1>
   <div class="status" id="ffmpegStatus">检测中…</div>
 </header>
 
@@ -84,7 +84,7 @@
     <div class="video-area" id="videoArea">
       <video id="player" controls preload="metadata"></video>
       <div class="placeholder" id="videoPlaceholder">
-        🎞️ 从左侧选择视频文件进行预览
+        从左侧选择视频文件进行预览
       </div>
     </div>
 
@@ -99,26 +99,26 @@
     <div class="clip-section-label">单文件精确剪辑（选文件时生效）</div>
 
     <div class="clip-row" style="margin-top:10px">
-      <div class="clip-label">起始</div>
+      <div class="clip-label">起始时间：</div>
       <div class="input-with-btn">
         <input type="text" id="startTime" value="00:00:00" placeholder="00:00:00">
-        <button type="button" onclick="setStartFromPlayer()">⏱ 当前</button>
+        <button type="button" onclick="setStartFromPlayer()">当前时间</button>
       </div>
     </div>
 
     <div class="clip-row" style="margin-top:8px">
-      <div class="clip-label">结束</div>
+      <div class="clip-label">结束时间：</div>
       <div class="input-with-btn">
         <input type="text" id="endTime" placeholder="到结尾">
-        <button type="button" onclick="setEndFromPlayer()">⏱ 当前</button>
+        <button type="button" onclick="setEndFromPlayer()">当前时间</button>
       </div>
     </div>
 
-    <div class="hint" id="durationHint" style="margin-top:8px">📐 剪辑时长：--</div>
+    <div class="hint" id="durationHint" style="margin-top:8px">剪辑时长：--</div>
 
     <div class="batch-clip-section">
       <div class="batch-clip-header">
-        <span class="batch-clip-title">📦 批量裁剪</span>
+        <span class="batch-clip-title">批量裁剪</span>
         <span class="batch-clip-hint">仅批量处理时生效 · 常用去片头片尾</span>
       </div>
       <div class="row">

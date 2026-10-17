@@ -1082,7 +1082,7 @@ function updateClipUI() {
   let dur = 0;
   if (e > s) dur = e - s;
   else if (videoDuration > 0) dur = videoDuration - s;
-  hint.textContent = dur > 0 ? `📐 剪辑时长：${formatTime(dur)}` : "📐 剪辑时长：--";
+  hint.textContent = dur > 0 ? `剪辑时长：${formatTime(dur)}` : "剪辑时长：--";
 }
 
 // ==================== 文件浏览 ====================
@@ -1104,7 +1104,7 @@ async function loadPath(path) {
     if (d.parent) {
       const li = document.createElement("li");
       li.className = "up";
-      li.innerHTML = `<span class="icon">📁</span><span class="name">..</span>`;
+      li.innerHTML = `<span class="name">..</span>`;
       li.onclick = () => loadPath(d.parent);
       ul.appendChild(li);
     }
@@ -1118,7 +1118,7 @@ async function loadPath(path) {
         const li = document.createElement("li");
         li.dataset.path = item.path;
         const size = item.size_human ? `<span class="size">${item.size_human}</span>` : "";
-        li.innerHTML = `<span class="icon">📁</span><span class="name"></span>${size}`;
+        li.innerHTML = `<span class="name"></span>${size}`;
         li.querySelector(".name").textContent = item.name;
         li.onclick = () => loadPath(item.path);
         ul.appendChild(li);
@@ -1144,7 +1144,6 @@ function buildVideoLi(item, hoverTip) {
   const inQueue = batchQueue.some(q => q.path === item.path);
   li.innerHTML = `
     <input type="checkbox" class="chk" title="勾选后可批量加入队列（Shift 点击连选）">
-    <span class="icon">🎞️</span>
     <span class="name"></span>
     <span class="size">${item.size_human || ""}</span>
     <button class="add-btn${inQueue ? " added" : ""}" title="${inQueue ? "已在队列" : "加入队列"}">${inQueue ? "✓" : "+"}</button>
@@ -1362,7 +1361,7 @@ async function loadPickerDir(path) {
     }
     dirs.forEach(it => {
       const li = document.createElement("li");
-      li.innerHTML = '<span class="icon">📁</span><span class="name"></span>';
+      li.innerHTML = '<span class="name"></span>';
       li.querySelector(".name").textContent = it.name;
       li.onclick = () => loadPickerDir(it.path);
       listEl.appendChild(li);
@@ -1400,7 +1399,7 @@ async function showPickerDrives() {
     }
     items.forEach(it => {
       const li = document.createElement("li");
-      li.innerHTML = '<span class="icon">💽</span><span class="name"></span>';
+      li.innerHTML = '<span class="name"></span>';
       li.querySelector(".name").textContent = it.name;
       li.onclick = () => loadPickerDir(it.path);
       listEl.appendChild(li);
@@ -1467,7 +1466,7 @@ function renderScanResult(d) {
   const back = document.createElement("li");
   back.className = "up";
   back.title = "返回普通目录浏览";
-  back.innerHTML = '<span class="icon">🔍</span><span class="name"></span>';
+  back.innerHTML = '<span class="name"></span>';
   back.querySelector(".name").textContent =
     `返回浏览（探查到 ${d.count} 个视频${d.truncated ? "，已达上限截断" : ""}）`;
   back.onclick = () => loadPath(currentDir);
