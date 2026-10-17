@@ -594,10 +594,8 @@ function calcSuffix(sameDir) {
 }
 
 function pickOutputExt(inputExt) {
-  if (!isTranscoding()) return inputExt;
-  const lower = (inputExt || "").toLowerCase();
-  if (lower === ".mkv") return ".mkv";
-  if (lower === ".webm") return ".webm";
+  if (!isTranscoding()) return inputExt;   // 不转码（copy）保持原容器
+  // 重新编码统一输出 mp4（h264/h265/av1 都能封装；音频不兼容时服务端会自动转 AAC）
   return ".mp4";
 }
 
