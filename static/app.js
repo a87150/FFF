@@ -325,6 +325,24 @@ function onQualityModeChange() {
   }
 }
 
+// ==================== 黑白显示模式 ====================
+const BW_KEY = "ffmpeg_web_bw_v1";   // 显示偏好单独存，与转码参数无关
+
+function applyBwMode(on) {
+  document.documentElement.classList.toggle("bw", on);
+  const btn = $("bwBtn");
+  if (btn) {
+    btn.classList.toggle("active", on);
+    btn.textContent = on ? "彩色显示" : "黑白显示";
+  }
+}
+
+function toggleBwMode() {
+  const on = !document.documentElement.classList.contains("bw");
+  applyBwMode(on);
+  try { localStorage.setItem(BW_KEY, on ? "1" : "0"); } catch (e) {}
+}
+
 // ==================== 参数记忆（localStorage） ====================
 function saveSettings() {
   const data = { clipMode: clipMode() };
@@ -2009,6 +2027,7 @@ function openOutputDir() {
 }
 
 // ==================== 初始化 ====================
+try { applyBwMode(localStorage.getItem(BW_KEY) === "1"); } catch (e) {}
 loadSettings();
 loadPath(currentDir);
 updateClipUI();

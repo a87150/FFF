@@ -10,14 +10,52 @@ body {
 
 header {
   background: #23272e;
-  padding: 12px 20px;
+  height: 50px;
+  padding: 0 20px;
   border-bottom: 1px solid #333;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
 }
-header h1 { margin: 0; font-size: 16px; font-weight: 600; }
-header .status { font-size: 12px; color: #888; }
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.brand-name {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  line-height: 1;
+}
+.brand-sub {
+  font-size: 12px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bw-btn {
+  background: #3a4048;
+  border: none;
+  color: #ddd;
+  border-radius: 3px;
+  padding: 5px 12px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.bw-btn:hover { background: #4a5058; }
+.bw-btn.active { background: #1a73e8; color: #fff; }
+.bw-btn.active:hover { background: #2c82f0; }
+
+/* ===== 黑白显示模式：整页灰度（根元素 filter 不影响 fixed 定位） ===== */
+html.bw { filter: grayscale(1); }
+
+header .status { margin-left: auto; font-size: 12px; color: #888; }
 header .status .ver { color: #4da6ff; font-weight: 600; }
 
 /* ===== 三列布局 ===== */
@@ -837,3 +875,19 @@ button.dir-btn:hover { background: #3b4a5c; }
 .toast-error { border-left-color: #c03030; }
 .toast-ok { border-left-color: #1e7a3a; }
 .toast-out { opacity: 0; transform: translateY(6px); }
+
+/* ===== 滚动条：细窄圆角，贴合深色风格 ===== */
+@supports (-moz-appearance: none) {
+  /* Firefox 用标准属性（对 Chromium 隐藏，避免覆盖下面的自定义样式） */
+  html { scrollbar-width: thin; scrollbar-color: #3a4048 transparent; }
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #3a4048;
+  background-clip: padding-box;            /* 透明边框 + 裁剪 = 内缩成细条 */
+  border: 2px solid transparent;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: #4d5560; }
+::-webkit-scrollbar-corner { background: transparent; }
