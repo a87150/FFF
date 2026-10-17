@@ -1170,7 +1170,12 @@ async function loadPath(path) {
     }
 
     if (d.items.length === 0) {
-      ul.innerHTML += `<li class="empty">（空目录，无视频文件）</li>`;
+      // 注意：这里必须 createElement 追加。用 innerHTML += 会重建整个列表，
+      // 把上面「..」行的 JS 点击事件一起丢掉（空目录里「..」就点不动了）
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = "（空目录，无视频文件）";
+      ul.appendChild(li);
     }
 
     d.items.forEach(item => {
