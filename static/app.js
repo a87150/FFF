@@ -9,6 +9,7 @@ let outputManuallyEdited = false;
 let lastRecommendation = null;
 let currentSrcInfo = null;
 let browseMode = "browse";   // "browse"（目录浏览）| "scan"（探查结果）
+let viewSeq = 0;             // 文件列表导航序号（丢弃过期响应，避免「..」点了不生效的竞态）
 
 let batchQueue = [];
 let isBatchRunning = false;
@@ -1086,9 +1087,12 @@ function updateClipUI() {
 
 // ==================== 文件浏览 ====================
 async function loadPath(path) {
+  if (!path) return;
+  const seq = ++viewSeq;   // 导航序号：晚发起的导航优先，过期响应直接丢弃
   try {
     const r = await fetch("/api/browse?path=" + encodeURIComponent(path));
     const d = await r.json();
+    if (seq !== viewSeq) return;   // 期间又发生了新导航，忽略这次过期结果
     if (d.error) { toast(d.error, "error"); return; }
     currentDir = d.path;
     browseMode = "browse";
@@ -1123,8 +1127,10 @@ async function loadPath(path) {
         ul.appendChild(buildVideoLi(item, item.path));
       }
     });
+
+    rebuildExtFilter();
   } catch (e) {
-    toast("加载失败: " + e, "error");
+    if (seq === viewSeq) toast("加载失败: " + e, "error");
   }
 }
 
@@ -1133,15 +1139,23 @@ async function loadPath(path) {
 function buildVideoLi(item, hoverTip) {
   const li = document.createElement("li");
   li.dataset.path = item.path;
+  li.dataset.ext = splitPath(item.path).ext.replace(".", "").toLowerCase();
   li.title = hoverTip || item.path;
   const inQueue = batchQueue.some(q => q.path === item.path);
   li.innerHTML = `
+    <input type="checkbox" class="chk" title="勾选后可批量加入队列（Shift 点击连选）">
     <span class="icon">🎞️</span>
     <span class="name"></span>
     <span class="size">${item.size_human || ""}</span>
     <button class="add-btn${inQueue ? " added" : ""}" title="${inQueue ? "已在队列" : "加入队列"}">${inQueue ? "✓" : "+"}</button>
   `;
   li.querySelector(".name").textContent = item.name;
+
+  const chk = li.querySelector(".chk");
+  chk.onclick = (e) => {
+    e.stopPropagation();
+    onRowCheckClick(chk, e.shiftKey);
+  };
 
   const addBtn = li.querySelector(".add-btn");
   addBtn.onclick = (e) => {
@@ -1162,16 +1176,151 @@ function buildVideoLi(item, hoverTip) {
   return li;
 }
 
+// ==================== 列表多选（按后缀筛选 / 全选反选 / Shift 连选 / 批量加入） ====================
+let lastCheckIndex = -1;   // Shift 连选的锚点
+
+// 可见（未被筛选隐藏）且带勾选框的行，按列表顺序
+function getCheckRows() {
+  return Array.from(document.querySelectorAll("#filelist li"))
+    .filter(li => li.querySelector(".chk") && li.style.display !== "none");
+}
+
+function updateSelCount() {
+  const checked = document.querySelectorAll("#filelist .chk:checked").length;
+  const btn = document.getElementById("addSelBtn");
+  if (btn) {
+    btn.textContent = `加入所选 (${checked})`;
+    btn.disabled = checked === 0;
+  }
+  document.querySelectorAll("#filelist li").forEach(li => {
+    const chk = li.querySelector(".chk");
+    li.classList.toggle("picked", !!(chk && chk.checked));
+  });
+}
+
+// 勾选框点击：Shift 点击 = 从锚点到当前行的范围连选
+function onRowCheckClick(chk, shiftKey) {
+  const rows = getCheckRows();
+  const idx = rows.findIndex(li => li.querySelector(".chk") === chk);
+  if (idx >= 0) {
+    if (shiftKey && lastCheckIndex >= 0 && lastCheckIndex < rows.length) {
+      const a = Math.min(lastCheckIndex, idx);
+      const b = Math.max(lastCheckIndex, idx);
+      for (let i = a; i <= b; i++) rows[i].querySelector(".chk").checked = chk.checked;
+    }
+    lastCheckIndex = idx;
+  }
+  updateSelCount();
+}
+
+function selectAllVisible() {
+  getCheckRows().forEach(li => { li.querySelector(".chk").checked = true; });
+  lastCheckIndex = -1;
+  updateSelCount();
+}
+
+function invertSelection() {
+  getCheckRows().forEach(li => {
+    const chk = li.querySelector(".chk");
+    chk.checked = !chk.checked;
+  });
+  lastCheckIndex = -1;
+  updateSelCount();
+}
+
+function clearSelection() {
+  document.querySelectorAll("#filelist .chk").forEach(chk => { chk.checked = false; });
+  lastCheckIndex = -1;
+  updateSelCount();
+}
+
+// 按后缀重建筛选下拉（保留仍可用的当前选择）
+function rebuildExtFilter() {
+  const sel = document.getElementById("extFilter");
+  if (!sel) return;
+  const prev = sel.value;
+  const exts = [...new Set(Array.from(document.querySelectorAll("#filelist li[data-ext]"))
+    .map(li => li.dataset.ext).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">全部后缀</option>' +
+    exts.map(x => `<option value="${x}">.${x}</option>`).join("");
+  if (exts.includes(prev)) sel.value = prev;
+  applyExtFilter();
+}
+
+// 应用筛选：隐藏不匹配的视频文件（文件夹与「..」不受影响）
+function applyExtFilter() {
+  const sel = document.getElementById("extFilter");
+  const val = sel ? sel.value : "";
+  let total = 0, shown = 0;
+  document.querySelectorAll("#filelist li[data-ext]").forEach(li => {
+    total++;
+    const ok = !val || li.dataset.ext === val;
+    li.style.display = ok ? "" : "none";
+    if (ok) shown++;
+  });
+  const ul = document.getElementById("filelist");
+  const hint = ul.querySelector("li.filter-empty");
+  if (total > 0 && shown === 0 && val) {
+    if (!hint) {
+      const li = document.createElement("li");
+      li.className = "empty filter-empty";
+      li.textContent = "（当前筛选没有匹配的文件）";
+      ul.appendChild(li);
+    }
+  } else if (hint) {
+    hint.remove();
+  }
+  lastCheckIndex = -1;
+  updateSelCount();
+}
+
+// 把勾选的视频批量加入队列
+function addSelectedToQueue() {
+  const rows = Array.from(document.querySelectorAll("#filelist li"))
+    .filter(li => li.querySelector(".chk:checked"));
+  if (rows.length === 0) {
+    toast("先勾选要加入的视频", "warn");
+    return;
+  }
+  const before = batchQueue.length;
+  rows.forEach(li => {
+    if (li.dataset.path) addToQueue(li.dataset.path, li.querySelector(".name").textContent);
+  });
+  const added = batchQueue.length - before;
+  rows.forEach(li => { li.querySelector(".chk").checked = false; });
+  lastCheckIndex = -1;
+  refreshFileListAddButtons();
+  updateSelCount();
+  const dup = rows.length - added;
+  toast(`已加入 ${added} 个到批量队列` + (dup > 0 ? `（${dup} 个已在队列）` : ""), "ok");
+}
+
 // ==================== 文件夹选择弹窗 ====================
 let pickerDir = "";
 let pickerParent = null;
+let pickerSeq = 0;   // 与 loadPath 同理：丢弃过期的加载结果
 
 // Windows 盘符根目录（如 C:\）
 function isWindowsDriveRoot(path) {
   return /^[A-Za-z]:[\\/]*$/.test(path || "");
 }
 
+// 按最后一次成功加载的位置，恢复「上级 / 选择此文件夹」可用状态
+function syncPickerButtons() {
+  const upBtn = document.getElementById("folderUpBtn");
+  const okBtn = document.getElementById("folderConfirmBtn");
+  if (upBtn) upBtn.disabled = !(pickerParent || isWindowsDriveRoot(pickerDir));
+  if (okBtn) okBtn.disabled = !pickerDir;
+}
+
 async function openFolderPicker() {
+  // 打开时先复位：加载完成前「上级/确认」不可点，避免点了没反应
+  pickerDir = "";
+  pickerParent = null;
+  const upBtn = document.getElementById("folderUpBtn");
+  const okBtn = document.getElementById("folderConfirmBtn");
+  if (upBtn) upBtn.disabled = true;
+  if (okBtn) okBtn.disabled = true;
   document.getElementById("folderModal").style.display = "flex";
   await loadPickerDir(currentDir || window.MEDIA_DIR);
 }
@@ -1185,22 +1334,25 @@ async function loadPickerDir(path) {
   const listEl = document.getElementById("folderModalList");
   const upBtn = document.getElementById("folderUpBtn");
   const okBtn = document.getElementById("folderConfirmBtn");
+  const seq = ++pickerSeq;
+  if (upBtn) upBtn.disabled = true;   // 加载中禁点，避免「上级」点了没反应
+  if (okBtn) okBtn.disabled = true;
   listEl.innerHTML = '<li class="empty">加载中…</li>';
   try {
     const r = await fetch("/api/browse?path=" + encodeURIComponent(path));
     const d = await r.json();
+    if (seq !== pickerSeq) return;   // 期间又有新的目录加载，忽略过期结果
     if (d.error) {
       toast(d.error, "error");
       listEl.innerHTML = '<li class="empty">加载失败</li>';
+      syncPickerButtons();   // 仍可回到上一个有效位置
       return;
     }
     pickerDir = d.path;
     pickerParent = d.parent;
     pathEl.textContent = d.path;
     pathEl.title = d.path;
-    // 盘符根目录（如 C:\）也能点「上级」→ 进入「此电脑」切换盘符
-    upBtn.disabled = !(d.parent || isWindowsDriveRoot(d.path));
-    if (okBtn) okBtn.disabled = false;
+    syncPickerButtons();
 
     listEl.innerHTML = "";
     const dirs = d.items.filter(it => it.is_dir);
@@ -1216,7 +1368,9 @@ async function loadPickerDir(path) {
       listEl.appendChild(li);
     });
   } catch (e) {
+    if (seq !== pickerSeq) return;
     toast("加载失败: " + e, "error");
+    syncPickerButtons();
   }
 }
 
@@ -1226,6 +1380,7 @@ async function showPickerDrives() {
   const listEl = document.getElementById("folderModalList");
   const upBtn = document.getElementById("folderUpBtn");
   const okBtn = document.getElementById("folderConfirmBtn");
+  const seq = ++pickerSeq;
   pickerDir = "";
   pickerParent = null;
   upBtn.disabled = true;
@@ -1236,6 +1391,7 @@ async function showPickerDrives() {
   try {
     const r = await fetch("/api/drives");
     const d = await r.json();
+    if (seq !== pickerSeq) return;
     listEl.innerHTML = "";
     const items = d.items || [];
     if (items.length === 0) {
@@ -1250,7 +1406,7 @@ async function showPickerDrives() {
       listEl.appendChild(li);
     });
   } catch (e) {
-    toast("加载失败: " + e, "error");
+    if (seq === pickerSeq) toast("加载失败: " + e, "error");
   }
 }
 
@@ -1273,6 +1429,7 @@ async function scanCurrentDir() {
   const dir = currentDir;
   const btn = document.getElementById("scanBtn");
   const ul = document.getElementById("filelist");
+  const seq = ++viewSeq;   // 与 loadPath 共用导航序号
   btn.disabled = true;
   btn.textContent = "探查中…";
   ul.innerHTML = "";
@@ -1284,6 +1441,7 @@ async function scanCurrentDir() {
   try {
     const r = await fetch("/api/scan?path=" + encodeURIComponent(dir));
     const d = await r.json();
+    if (seq !== viewSeq) return;   // 期间又发生了新导航，忽略过期结果
     if (d.error) {
       toast(d.error, "error");
       loadPath(dir);
@@ -1292,8 +1450,10 @@ async function scanCurrentDir() {
     browseMode = "scan";
     renderScanResult(d);
   } catch (e) {
-    toast("探查失败: " + e, "error");
-    loadPath(dir);
+    if (seq === viewSeq) {
+      toast("探查失败: " + e, "error");
+      loadPath(dir);
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = "探查";
@@ -1318,6 +1478,7 @@ function renderScanResult(d) {
     empty.className = "empty";
     empty.textContent = "（没有找到视频文件）";
     ul.appendChild(empty);
+    rebuildExtFilter();
     return;
   }
 
@@ -1326,6 +1487,7 @@ function renderScanResult(d) {
     const tip = (item.rel && item.rel !== item.name) ? item.rel : item.path;
     ul.appendChild(buildVideoLi(item, tip));
   });
+  rebuildExtFilter();
 }
 
 // 任务完成后按当前视图刷新（普通浏览 / 探查结果）

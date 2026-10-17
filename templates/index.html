@@ -34,6 +34,16 @@
       <div class="fav-list" id="favList"></div>
     </div>
 
+    <div class="list-tools">
+      <select id="extFilter" onchange="applyExtFilter()" title="按文件后缀筛选视频"></select>
+      <div class="list-tools-btns">
+        <button onclick="selectAllVisible()" title="全选当前筛选可见的视频">全选</button>
+        <button onclick="invertSelection()" title="反选当前筛选可见的视频">反选</button>
+        <button onclick="clearSelection()" title="清空勾选">清空</button>
+        <button class="primary" id="addSelBtn" onclick="addSelectedToQueue()" title="把勾选的视频加入批量队列" disabled>加入所选 (0)</button>
+      </div>
+    </div>
+
     <ul class="filelist" id="filelist"></ul>
   </div>
 
@@ -49,7 +59,7 @@
     </div>
 
     <div class="queue-hint" id="queueHint">
-      在左侧文件上悬停点 + 加入队列<br>
+      在左侧文件上悬停点 + 加入，或勾选多个后点「加入所选」<br>
       支持批量去片头片尾、批量转码
     </div>
 
@@ -275,7 +285,7 @@
       <button class="modal-close" onclick="closeFolderPicker()" title="关闭">×</button>
     </div>
     <div class="modal-path-row">
-      <button id="folderUpBtn" onclick="pickerGoUp()" title="上一级">⬆ 上级</button>
+      <button id="folderUpBtn" onclick="pickerGoUp()" title="上一级" disabled>⬆ 上级</button>
       <span class="modal-path" id="folderModalPath"></span>
     </div>
     <ul class="modal-list" id="folderModalList"></ul>

@@ -167,6 +167,40 @@ h2 {
   font-style: italic;
 }
 
+/* ===== 列表工具（筛选 + 多选） ===== */
+.list-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.list-tools select {
+  width: 100%;
+  background: #2a2e35;
+  border: 1px solid #3a4048;
+  color: #e0e0e0;
+  border-radius: 3px;
+  padding: 4px 6px;
+  font-size: 12px;
+  outline: none;
+}
+.list-tools-btns { display: flex; gap: 6px; }
+.list-tools-btns button {
+  flex: 1;
+  background: #3a4048;
+  border: none;
+  color: #ddd;
+  border-radius: 3px;
+  padding: 3px 6px;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.list-tools-btns button:hover:not(:disabled) { background: #4a5058; }
+.list-tools-btns button:disabled { opacity: 0.45; cursor: default; }
+.list-tools-btns button.primary { background: #1a73e8; color: #fff; flex: 1.6; }
+.list-tools-btns button.primary:hover:not(:disabled) { background: #2b7de9; }
+
 /* ===== 文件列表 ===== */
 .filelist { list-style: none; padding: 0; margin: 0; }
 .filelist li {
@@ -179,7 +213,16 @@ h2 {
   font-size: 13px;
 }
 .filelist li:hover { background: #2a2e35; }
+.filelist li.picked { background: rgba(26, 115, 232, 0.14); }
 .filelist li.selected { background: #2d4a7a; }
+.filelist li .chk {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #1a73e8;
+  cursor: pointer;
+}
 .filelist li .icon { width: 16px; text-align: center; flex-shrink: 0; }
 .filelist li .name {
   flex: 1;
