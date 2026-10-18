@@ -325,22 +325,20 @@ function onQualityModeChange() {
   }
 }
 
-// ==================== 黑白显示模式 ====================
-const BW_KEY = "ffmpeg_web_bw_v1";   // 显示偏好单独存，与转码参数无关
+// ==================== 白天 / 夜晚主题 ====================
+const THEME_KEY = "ffmpeg_web_theme_v1";   // 显示偏好单独存，与转码参数无关
 
-function applyBwMode(on) {
-  document.documentElement.classList.toggle("bw", on);
-  const btn = $("bwBtn");
-  if (btn) {
-    btn.classList.toggle("active", on);
-    btn.textContent = on ? "彩色显示" : "黑白显示";
-  }
+function applyTheme(theme) {
+  const light = theme === "light";
+  document.documentElement.classList.toggle("light", light);
+  const btn = $("themeBtn");
+  if (btn) btn.textContent = light ? "夜晚模式" : "白天模式";
 }
 
-function toggleBwMode() {
-  const on = !document.documentElement.classList.contains("bw");
-  applyBwMode(on);
-  try { localStorage.setItem(BW_KEY, on ? "1" : "0"); } catch (e) {}
+function toggleTheme() {
+  const light = !document.documentElement.classList.contains("light");
+  applyTheme(light ? "light" : "dark");
+  try { localStorage.setItem(THEME_KEY, light ? "light" : "dark"); } catch (e) {}
 }
 
 // ==================== 参数记忆（localStorage） ====================
@@ -2027,7 +2025,7 @@ function openOutputDir() {
 }
 
 // ==================== 初始化 ====================
-try { applyBwMode(localStorage.getItem(BW_KEY) === "1"); } catch (e) {}
+try { applyTheme(localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"); } catch (e) {}
 loadSettings();
 loadPath(currentDir);
 updateClipUI();
