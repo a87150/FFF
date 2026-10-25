@@ -202,3 +202,120 @@ class TestScanVideos:
     def test_empty_dir(self, tmp_path):
         items, truncated = fu.scan_videos(str(tmp_path))
         assert items == [] and truncated is False
+
+
+# ==================== 合并 ====================
+
+def _merge_info(duration=10.0, vcodec="h264", width=1920, height=1080,
+                pix="yuv420p", fps="30/1", audio=True,
+                acodec="aac", sample_rate="48000", channels=2):
+    streams = [{"codec_type": "video", "codec_name": vcodec, "width": width,
+                "height": height, "pix_fmt": pix, "r_frame_rate": fps}]
+    if audio:
+        streams.append({"codec_type": "audio", "codec_name": acodec,
+                        "sample_rate": sample_rate, "channels": channels})
+    return {"format": {"duration": str(duration)}, "streams": streams}
+
+
+def _entries(*infos):
+    return [{"path": f"C:/v/v{i}.mp4", "info": info} for i, info in enumerate(infos)]
+
+
+class TestMergeCopyCompat:
+    def test_identical_streams_can_copy(self):
+        assert fu.can_merge_copy([_merge_info(), _merge_info()]) is True
+
+    def test_different_codec_cannot_copy(self):
+        assert fu.can_merge_copy(
+            [_merge_info(), _merge_info(vcodec="hevc")]) is False
+
+    def test_different_resolution_cannot_copy(self):
+        assert fu.can_merge_copy(
+            [_merge_info(), _merge_info(width=1280, height=720)]) is False
+
+    def test_different_audio_cannot_copy(self):
+        assert fu.can_merge_copy(
+            [_merge_info(), _merge_info(acodec="ac3")]) is False
+
+    def test_one_side_without_audio_cannot_copy(self):
+        assert fu.can_merge_copy(
+            [_merge_info(), _merge_info(audio=False)]) is False
+
+    def test_needs_two_files(self):
+        assert fu.can_merge_copy([_merge_info()]) is False
+        assert fu.can_merge_copy([]) is False
+
+
+class TestMergeAudioFallback:
+    def test_copy_becomes_aac(self):
+        codec, br, note = fu.merge_audio_fallback("mp4", "copy", "")
+        assert codec == "aac" and br == "192k" and "AAC" in note
+
+    def test_explicit_codec_kept(self):
+        assert fu.merge_audio_fallback("mp4", "ac3", "256k") == ("ac3", "256k", "")
+
+    def test_webm_uses_opus(self):
+        codec, br, note = fu.merge_audio_fallback("webm", "copy", "")
+        assert codec == "libopus" and br == "128k" and "Opus" in note
+
+
+class TestBuildMergeCommand:
+    def test_basic_filter_graph(self):
+        entries = _entries(_merge_info(10), _merge_info(20))
+        cmd, total, note = fu.build_merge_command(
+            entries, "C:/out/merged.mp4", "software", "h264", 23, "", "medium", "")
+        assert cmd is not None and note == ""
+        assert total == pytest.approx(30.0)
+        joined = " ".join(cmd)
+        assert "concat=n=2:v=1:a=1[vcat][acat]" in joined
+        assert "scale=1920:1080:force_original_aspect_ratio=decrease" in joined
+        assert "fps=30/1" in joined
+        assert "-map [vcat] -map [acat]" in joined
+        assert "-c:v libx264" in joined and "-c:a aac" in joined
+
+    def test_head_tail_trim_applied(self):
+        entries = _entries(_merge_info(10), _merge_info(20))
+        cmd, total, _ = fu.build_merge_command(
+            entries, "C:/out/m.mp4", "software", "h264", 23, "", "medium", "",
+            head_trim="00:00:02", tail_trim="00:00:03")
+        joined = " ".join(cmd)
+        assert total == pytest.approx((10 - 2 - 3) + (20 - 2 - 3))
+        assert "trim=start=2.000:end=7.000" in joined
+        assert "trim=start=2.000:end=17.000" in joined
+
+    def test_silent_audio_added_for_missing_track(self):
+        entries = _entries(_merge_info(10), _merge_info(10, audio=False))
+        cmd, _, _ = fu.build_merge_command(
+            entries, "C:/out/m.mp4", "software", "h264", 23, "", "medium", "")
+        assert "anullsrc=r=48000:cl=stereo,atrim=0:10.000" in " ".join(cmd)
+
+    def test_scale_with_auto_dimension(self):
+        entries = _entries(_merge_info(10), _merge_info(10))
+        cmd, _, _ = fu.build_merge_command(
+            entries, "C:/out/m.mp4", "software", "h264", 23, "", "medium", "1280:-2")
+        # 16:9 源，1280 宽 -> 高 720
+        assert "scale=1280:720:force_original_aspect_ratio=decrease" in " ".join(cmd)
+
+    def test_rejects_single_file(self):
+        cmd, total, msg = fu.build_merge_command(
+            _entries(_merge_info()), "C:/out/m.mp4", "software", "h264", 23, "", "medium", "")
+        assert cmd is None and "2 个文件" in msg
+
+    def test_rejects_copy_platform(self):
+        cmd, _, msg = fu.build_merge_command(
+            _entries(_merge_info(), _merge_info()), "C:/out/m.mp4", "copy", "h264", 23, "", "medium", "")
+        assert cmd is None and "不支持" in msg
+
+    def test_trim_longer_than_file_rejected(self):
+        cmd, _, msg = fu.build_merge_command(
+            _entries(_merge_info(10), _merge_info(10)), "C:/out/m.mp4",
+            "software", "h264", 23, "", "medium", "",
+            head_trim="00:00:08", tail_trim="00:00:08")
+        assert cmd is None and "时长为 0" in msg
+
+    def test_copy_command_uses_concat_demuxer(self):
+        cmd = fu.build_merge_copy_command("C:/out/m.mp4", "C:/tmp/list.txt")
+        joined = " ".join(cmd)
+        assert "-f concat -safe 0 -i C:/tmp/list.txt" in joined
+        assert "-c copy" in joined
+        assert "-movflags +faststart" in joined

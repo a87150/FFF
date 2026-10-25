@@ -7,6 +7,7 @@ HTTP 路由层：页面、目录浏览、媒体信息、预览、转码提交、
 import os
 import platform
 import re
+import tempfile
 import time
 
 from flask import Blueprint, jsonify, render_template, request, send_file
@@ -14,10 +15,12 @@ from flask import Blueprint, jsonify, render_template, request, send_file
 from config import (BITRATE_RE, DEFAULT_PRESETS, FASTSTART_EXTS, FFMPEG,
                     IS_LINUX, MEDIA_DIR, SCALE_RE, SCAN_MAX_DIRS,
                     SCAN_MAX_FILES, VALID_PRESETS, VAAPI_DEVICE, VIDEO_EXTS)
-from ffmpeg_utils import (build_encoder, check_copy_video_compat,
-                          ensure_audio_compatible, get_video_info, human_size,
-                          output_ext, parse_time, run_subprocess, same_file,
-                          scan_videos)
+from ffmpeg_utils import (build_encoder, build_merge_command,
+                          build_merge_copy_command, can_merge_copy,
+                          check_copy_video_compat, ensure_audio_compatible,
+                          get_video_info, human_size, output_ext, parse_time,
+                          run_subprocess, same_file, scan_videos,
+                          write_concat_list)
 from tasks import manager
 
 bp = Blueprint("main", __name__)
@@ -299,6 +302,121 @@ def transcode():
         cmd, actual_duration,
         input_path=input_path, output_path=output_path,
         audio_note=note,
+    )
+    return jsonify({
+        "task_id": task_id,
+        "cmd": " ".join(cmd),
+        "audio_note": note,
+    })
+
+
+@bp.route("/api/merge", methods=["POST"])
+def merge():
+    """把队列里的多个文件按顺序合并成一个（不同参数时自动统一分辨率 / 帧率 / 音频）"""
+    d = request.json or {}
+    raw_inputs = d.get("inputs") or []
+    if not isinstance(raw_inputs, list):
+        return _err("inputs 必须是文件路径数组")
+    inputs = [str(p).strip() for p in raw_inputs if str(p).strip()]
+    if len(inputs) < 2:
+        return _err("合并至少需要 2 个文件")
+    for p in inputs:
+        if not os.path.isfile(p):
+            return _err(f"输入文件不存在: {p}")
+
+    output_path = d.get("output", "").strip()
+    if not output_path:
+        return _err("请指定输出路径")
+    if os.path.isdir(output_path):
+        return _err("输出路径是已存在的目录")
+    if any(same_file(p, output_path) for p in inputs):
+        return _err("输出路径不能和输入相同")
+
+    out_ext = output_ext(output_path)
+    if not out_ext:
+        return _err("输出文件缺少扩展名，请指定如 .mp4 / .mkv")
+
+    # 覆盖保护：前端确认后带 overwrite=true 再次提交
+    if os.path.exists(output_path) and not d.get("overwrite"):
+        return jsonify({"error": "输出文件已存在", "exists": True}), 409
+
+    platform_name = d.get("platform", "software")
+    fmt = d.get("format", "h264")
+    quality_value = d.get("quality_value", "23")
+    bitrate = d.get("bitrate", "").strip()
+    preset = d.get("preset", "medium")
+    scale = d.get("scale", "").strip()
+    acodec = d.get("acodec", "copy")
+    abitrate = d.get("abitrate", "")
+    extra = d.get("extra", "").strip()
+    head_trim = d.get("head_trim", "").strip()
+    tail_trim = d.get("tail_trim", "").strip()
+
+    # ===== 参数校验 =====
+    try:
+        quality_value = int(float(str(quality_value)))
+    except (TypeError, ValueError):
+        return _err("质量值必须是数字")
+    quality_value = max(0, min(51, quality_value))
+
+    if bitrate and not BITRATE_RE.match(bitrate):
+        return _err("目标码率格式不正确，示例：5M / 8000k")
+    if scale and not SCALE_RE.match(scale):
+        return _err("缩放格式不正确，示例：1920:1080 或 -2:720")
+    if platform_name in VALID_PRESETS and preset not in VALID_PRESETS[platform_name]:
+        preset = DEFAULT_PRESETS[platform_name]
+
+    # 纯参数校验先做，避免读完文件信息才报错
+    if platform_name == "smart":
+        return _err("合并不能使用智能模式，请选择具体的转码平台（如 software）")
+    if platform_name != "copy" and out_ext == "webm" and fmt != "av1":
+        return _err("WebM 容器仅支持 VP8 / VP9 / AV1 视频，"
+                    "请改输出扩展名（如 .mp4 / .mkv）或选择 AV1 编码")
+
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    infos = [get_video_info(p) for p in inputs]
+    for p, info in zip(inputs, infos):
+        if not info or "error" in info:
+            return _err(f"无法读取文件信息（{os.path.basename(p)}）："
+                        f"{(info or {}).get('error', '')}")
+
+    cleanup_paths = []
+    if platform_name == "copy":
+        # copy 合并：不重新编码，要求流特征完全一致，且不能裁剪
+        if (head_trim and head_trim != "00:00:00") or (tail_trim and tail_trim != "00:00:00"):
+            return _err("copy 模式不能裁剪，请改用转码后再合并")
+        if not can_merge_copy(infos):
+            return _err("队列中的文件编码 / 分辨率不一致，copy 模式无法直接合并。"
+                        "请选择转码平台（如 software）后重试")
+        fd, list_path = tempfile.mkstemp(prefix="ffmerge_", suffix=".txt")
+        os.close(fd)
+        write_concat_list(inputs, list_path)
+        cleanup_paths.append(list_path)
+        cmd = build_merge_copy_command(output_path, list_path)
+        note = ""
+        total = 0.0
+        for info in infos:
+            try:
+                total += float(info["format"]["duration"])
+            except Exception:
+                total = 0.0
+                break
+    else:
+        entries = [{"path": p, "info": info} for p, info in zip(inputs, infos)]
+        cmd, total, note = build_merge_command(
+            entries, output_path, platform_name, fmt, quality_value, bitrate,
+            preset, scale, acodec=acodec, abitrate=abitrate, extra=extra,
+            head_trim=head_trim, tail_trim=tail_trim)
+        if cmd is None:
+            return _err(note or "无法构建合并命令")
+
+    task_id = manager.create_task(
+        cmd, total,
+        input_path=inputs[0], output_path=output_path,
+        audio_note=note, cleanup_paths=cleanup_paths,
     )
     return jsonify({
         "task_id": task_id,

@@ -6,6 +6,7 @@ TaskManager 实例是线程安全的，且不依赖 Flask；并发数、等待�
 """
 
 import atexit
+import os
 import re
 import subprocess
 import threading
@@ -38,7 +39,8 @@ class TaskManager:
 
     # ---------- 公开接口 ----------
 
-    def create_task(self, cmd, duration=None, input_path="", output_path="", audio_note=""):
+    def create_task(self, cmd, duration=None, input_path="", output_path="", audio_note="",
+                    cleanup_paths=None):
         """登记任务并启动后台线程（超出并发上限时任务保持 pending 排队）"""
         task_id = str(uuid.uuid4())
         with self._tasks_lock:
@@ -51,7 +53,8 @@ class TaskManager:
                 "speed": "", "eta": None,
                 "audio_note": audio_note or "",
             }
-        threading.Thread(target=self._run, args=(task_id, cmd, duration), daemon=True).start()
+        threading.Thread(target=self._run, args=(task_id, cmd, duration, cleanup_paths),
+                         daemon=True).start()
         return task_id
 
     def get(self, task_id):
@@ -199,7 +202,7 @@ class TaskManager:
                 if task is not None:
                     task["log"] = "\n".join(log_lines[-25:])
 
-    def _run(self, task_id, cmd, duration):
+    def _run(self, task_id, cmd, duration, cleanup_paths=None):
         # 并发上限：超出的任务在这里排队等待（任务状态保持 pending）
         with self._semaphore:
             with self._tasks_lock:
@@ -210,6 +213,7 @@ class TaskManager:
                     task["status"] = "cancelled"
                     task["error"] = task.get("error") or "用户已中止任务"
                     task.setdefault("end_time", datetime.now().isoformat())
+                    self._cleanup_paths(cleanup_paths)
                     return
                 task["status"] = "running"
                 task["start_time"] = datetime.now().isoformat()
@@ -305,6 +309,16 @@ class TaskManager:
             finally:
                 with self._process_lock:
                     self._processes.pop(task_id, None)
+                # 合并任务用到的临时列表文件等，任务结束后统一清理
+                self._cleanup_paths(cleanup_paths)
+
+    @staticmethod
+    def _cleanup_paths(paths):
+        for path in paths or []:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 # Web 层使用的单例

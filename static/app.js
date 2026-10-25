@@ -13,6 +13,7 @@ let viewSeq = 0;             // 文件列表导航序号（丢弃过期响应，
 
 let batchQueue = [];
 let isBatchRunning = false;
+let isMerging = false;        // 合并运行中（与批量队列共用运行态，但中止后不做批量续跑保存）
 let batchCancelled = false;
 let batchTotal = 0;
 let batchDone = 0;
@@ -374,7 +375,7 @@ function loadSettings() {
     el.value = data[id];
   });
 
-  if (data.clipMode === "batch" || data.clipMode === "single") setClipMode(data.clipMode);
+  if (["single", "batch", "merge"].includes(data.clipMode)) setClipMode(data.clipMode);
 
   onQualityModeChange();
 
@@ -585,7 +586,7 @@ function applyRecommendation(mode) {
 // ==================== 输出路径智能生成 ====================
 // 是否设置了剪辑（按模式只算所属模式的时间：单文件=起始/结束，批量=片头/片尾）
 function isClipping(mode) {
-  if ((mode || clipMode()) === "batch") {
+  if ((mode || clipMode()) !== "single") {
     const h = $("headTrim").value.trim();
     const t = $("tailTrim").value.trim();
     return (h && h !== "00:00:00") || (t && t !== "00:00:00");
@@ -632,9 +633,30 @@ function computeOutputPath(inputPath, mode) {
 // 用户没手动改过输出路径时，按当前输入自动生成（手动改过则保持不动）
 function updateOutputPath() {
   if (outputManuallyEdited) return;
+  // 合并模式：输出名按队列第一个文件生成 *_merge
+  if (clipMode() === "merge") {
+    const uiPath = $("outputPath").value.trim();
+    if (batchQueue.length > 0) {
+      const { dir, base, ext } = splitPath(batchQueue[0].path);
+      $("outputPath").value = joinPath(dir, base + "_merge" + pickOutputExt(ext));
+    } else if (uiPath) {
+      $("outputPath").value = "";
+    }
+    return;
+  }
   const inputPath = $("inputPath").value;
   if (!inputPath) return;
   $("outputPath").value = computeOutputPath(inputPath);
+}
+
+// 合并输出路径：手动改过就用输入框，否则按队列第一个文件生成 *_merge
+function computeMergeOutputPath() {
+  const uiPath = $("outputPath").value.trim();
+  if (uiPath && outputManuallyEdited) return uiPath;
+  const first = batchQueue.length > 0 ? batchQueue[0].path : "";
+  if (!first) return uiPath;
+  const { dir, base, ext } = splitPath(first);
+  return joinPath(dir, base + "_merge" + pickOutputExt(ext));
 }
 
 function onTimeChanged() {
@@ -725,6 +747,8 @@ async function restoreSession() {
   } else {
     renderQueue();
   }
+  updateSubmitLabel();
+  updateOutputPath();
   if (!isBatchRunning) await restoreSingleTask();
 }
 
@@ -836,9 +860,20 @@ function renderQueue() {
   }
 }
 
-function addToQueue(path, name) {
-  if (!path) return;
-  if (batchQueue.some(it => it.path === path)) return;
+// 「开始转码」按钮文案：队列有内容时显示数量，明确点击后处理整个队列
+function updateSubmitLabel() {
+  const btn = $("submitBtn");
+  if (!btn || isBatchRunning || currentTaskId) return;
+  const prefix = batchQueue.length > 0 && clipMode() === "merge" ? "开始合并" : "开始转码";
+  btn.textContent = batchQueue.length > 0
+    ? `${prefix}（队列 ${batchQueue.length}）`
+    : prefix;
+}
+
+// 低层入队：去重 + 保存 + 渲染（不改变剪辑模式）
+function enqueueFile(path, name) {
+  if (!path) return false;
+  if (batchQueue.some(it => it.path === path)) return false;
   batchQueue.push({
     path,
     name: name || splitPath(path).filename,
@@ -848,6 +883,18 @@ function addToQueue(path, name) {
   });
   saveBatchState();
   renderQueue();
+  updateSubmitLabel();
+  updateOutputPath();   // 合并模式下输出名跟随队列第一个文件
+  return true;
+}
+
+// 界面上的「加入队列」操作：精确剪辑只对单个文件有效，入队后切到批量裁剪（合并模式保持）
+function addToQueue(path, name) {
+  if (!enqueueFile(path, name)) return;
+  if (clipMode() === "single") {
+    setClipMode("batch");
+    saveSettings();
+  }
 }
 
 function removeFromQueue(idx) {
@@ -860,6 +907,8 @@ function removeFromQueue(idx) {
   renderQueue();
   // 同步左侧按钮状态
   refreshFileListAddButtons();
+  updateSubmitLabel();
+  updateOutputPath();
 }
 
 function clearQueue() {
@@ -875,6 +924,8 @@ function clearQueue() {
   saveBatchState();
   renderQueue();
   refreshFileListAddButtons();
+  updateSubmitLabel();
+  updateOutputPath();
 }
 
 function clearCompleted() {
@@ -891,6 +942,8 @@ function clearCompleted() {
   saveBatchState();
   renderQueue();
   refreshFileListAddButtons();
+  updateSubmitLabel();
+  updateOutputPath();
 }
 
 // 把失败 / 中止的项目重置为待处理，便于一键重跑
@@ -966,7 +1019,7 @@ function collectEncoderParams(overrides) {
 // 构建 /api/transcode 请求体；trim 可选（"batch" 用批量字段），默认按当前剪辑模式
 function buildPayload(inputPath, outputPath, opts) {
   opts = opts || {};
-  const batch = (opts.trim || clipMode()) === "batch";
+  const batch = (opts.trim || clipMode()) !== "single";
   const timing = batch
     ? { start_time: "", end_time: "", head_trim: $("headTrim").value.trim(), tail_trim: $("tailTrim").value.trim() }
     : { start_time: $("startTime").value, end_time: $("endTime").value, head_trim: "", tail_trim: "" };
@@ -1169,20 +1222,23 @@ function updateClipUI() {
 // ==================== 剪辑模式（单文件精确剪辑 / 批量裁剪） ====================
 function clipMode() {
   const el = document.querySelector('input[name="clipMode"]:checked');
-  return el && el.value === "batch" ? "batch" : "single";
+  const v = el && el.value;
+  return v === "batch" || v === "merge" ? v : "single";
 }
 
-// 切换模式：时间输入区整体切换；两种模式的行结构样式一致
+// 切换模式：单文件用起始/结束，批量与合并用片头/片尾
 function setClipMode(mode) {
-  const batch = mode === "batch";
+  const single = mode === "single";
   const radio = document.querySelector(`input[name="clipMode"][value="${mode}"]`);
   if (radio) radio.checked = true;
-  $("singleClipBox").style.display = batch ? "none" : "";
-  $("batchClipBox").style.display = batch ? "" : "none";
-  $("clipBar").style.display = batch ? "none" : "";
-  document.querySelector(".clip-time-tip").style.display = batch ? "none" : "";
+  $("singleClipBox").style.display = single ? "" : "none";
+  $("batchClipBox").style.display = single ? "none" : "";
+  $("mergeNote").style.display = mode === "merge" ? "" : "none";
+  $("clipBar").style.display = single ? "" : "none";
+  document.querySelector(".clip-time-tip").style.display = single ? "" : "none";
   updateClipUI();
   updateOutputPath();   // 输出名后缀按当前模式的时间规则生成
+  updateSubmitLabel();  // 合并模式按钮显示「开始合并」
 }
 
 // 批量裁剪「清零」
@@ -1612,7 +1668,7 @@ function refreshView() {
 
 async function previewFile(path) {
   $("inputPath").value = path;
-  outputManuallyEdited = false;
+  if (clipMode() !== "merge") outputManuallyEdited = false;   // 合并模式保留手改的输出路径
   updateOutputPath();
 
   videoArea.style.aspectRatio = "16 / 9";
@@ -1665,9 +1721,9 @@ async function selectFile(path) {
 }
 
 // ==================== 提交 / 中止 ====================
-// 提交转码请求；输出文件已存在（409）时弹窗确认后带 overwrite 重试
-async function postTranscode(payload) {
-  const send = (body) => fetch("/api/transcode", {
+// 提交任务请求；输出文件已存在（409）时弹窗确认后带 overwrite 重试
+async function postJob(url, payload) {
+  const send = (body) => fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1685,6 +1741,9 @@ async function postTranscode(payload) {
   }
   return await r.json();
 }
+
+function postTranscode(payload) { return postJob("/api/transcode", payload); }
+function postMerge(payload) { return postJob("/api/merge", payload); }
 
 // 轮询任务直到结束（网络抖动重试几次，避免误判失败）
 function waitForTask(taskId) {
@@ -1714,82 +1773,37 @@ function waitForTask(taskId) {
   });
 }
 
+// 统一入口：单文件与多文件都走队列。当前选中的单个文件会自动入队（重复则忽略）
 async function submitTask() {
-  if (clipMode() === "batch") {
-    if (batchQueue.length === 0) {
-      toast("批量裁剪需要先把文件加入队列", "warn");
-      return;
-    }
-    await runBatch();
-  } else {
-    if (!$("inputPath").value) {
-      toast(batchQueue.length > 0
-        ? "当前是单文件模式：请先选择文件；要处理队列请切换到「批量裁剪」"
-        : "请先选择输入文件", "warn");
-      return;
-    }
-    await runSingle();
-  }
-}
-
-async function runSingle() {
-  const platform = $("platform").value;
-  const inputPath = $("inputPath").value;
-  const outputPath = $("outputPath").value;
-
-  let payload;
-
-  if (platform === "smart") {
-    // 智能模式：优先用缓存的源信息，没有就现取一次
-    let srcInfo = currentSrcInfo;
-    if (!srcInfo) {
-      if (!inputPath) { toast("请先选择输入文件", "warn"); return; }
-      const r = await fetch("/api/info?path=" + encodeURIComponent(inputPath));
-      srcInfo = await r.json();
-    }
-    payload = buildPayload(inputPath, outputPath, { params: resolveSmartParams(srcInfo) });
-  } else {
-    payload = buildPayload(inputPath, outputPath);
+  if (isBatchRunning) return;
+  const input = $("inputPath").value.trim();
+  if (input) enqueueFile(input);
+  if (batchQueue.length === 0) {
+    toast("请先从左侧选择视频，或把视频加入队列", "warn");
+    return;
   }
 
-  if (!payload.input) { toast("请先选择输入文件", "warn"); return; }
-  if (!payload.output) { toast("请填写输出文件路径", "warn"); return; }
-
-  const btn = $("submitBtn");
-  const stopBtn = $("stopBtn");
-  btn.disabled = true;
-  btn.textContent = "提交中…";
-  $("openDirBtn").style.display = "none";
-
-  try {
-    const d = await postTranscode(payload);
-    if (d.error) {
-      toast(d.error, "error");
-      btn.disabled = false;
-      btn.textContent = "开始转码";
+  // 合并模式：整个队列按顺序拼成一个文件
+  if (clipMode() === "merge") {
+    if (batchQueue.length < 2) {
+      toast("合并至少需要队列里有 2 个文件，请再加入一个", "warn");
       return;
     }
-    currentTaskId = d.task_id;
-    saveActiveTask(d.task_id, payload.input, payload.output);
-    $("progressWrap").style.display = "block";
-    $("logBox").style.display = "block";
-    $("logBox").textContent = "$ " + (d.cmd || "");
-    if (d.audio_note) {
-      $("logBox").textContent += "\n\n[提示] " + d.audio_note;
-    }
-    stopBtn.style.display = "inline-block";
-    stopBtn.disabled = false;
-    btn.textContent = "运行中…";
-
-    // 轮询到任务结束，统一切换到完成 / 中止 / 失败收尾
-    const t = await waitForTask(d.task_id);
-    currentTaskId = null;
-    finishSingleTask(t);
-  } catch (e) {
-    toast("提交失败: " + e, "error");
-    btn.disabled = false;
-    btn.textContent = "开始转码";
+    await runMerge();
+    return;
   }
+
+  // 批量运行：多个文件时单文件起止时间自动失效，只用批量片头 / 片尾
+  if (batchQueue.length > 1) {
+    if (clipMode() === "single") {
+      setClipMode("batch");
+      saveSettings();
+      if (isClipping("single")) {
+        toast("队列里有多个文件：单文件起止时间已失效，将按批量片头 / 片尾执行", "warn");
+      }
+    }
+  }
+  await runBatch();
 }
 
 // 单任务结束后的界面收尾（restored=true 表示刷新后还原，不再弹提示/重复刷新列表）
@@ -1814,6 +1828,132 @@ function finishSingleTask(t, restored) {
   }
   if (t.error) {
     $("logBox").textContent += "\n\n[提示] " + t.error;
+  }
+}
+
+// 合并：把队列里的文件按顺序拼成一个（转码合并会自动统一分辨率 / 帧率 / 音频）
+async function runMerge() {
+  if (isBatchRunning) return;
+  const outPath = computeMergeOutputPath();
+  if (!outPath) {
+    toast("请先指定合并后的输出文件路径", "warn");
+    return;
+  }
+  isBatchRunning = true;
+  isMerging = true;
+  batchCancelled = false;
+  batchTotal = batchQueue.length;
+  batchDone = 0;
+  batchQueue.forEach(item => {
+    item.status = "pending";
+    item.taskId = null;
+    item.error = "";
+    item.outName = "";
+  });
+  renderQueue();
+  // 合并是单条命令任务：不写 running 标记，避免刷新后被当成批量任务续跑
+  try {
+    localStorage.setItem(BATCH_STATE_KEY, JSON.stringify({
+      running: false, cancelled: false, queue: batchQueue,
+    }));
+  } catch (e) {}
+  clearActiveTask();
+
+  const btn = $("submitBtn");
+  const stopBtn = $("stopBtn");
+  btn.disabled = true;
+  btn.textContent = `合并 ${batchQueue.length} 个文件…`;
+  stopBtn.style.display = "inline-block";
+  stopBtn.disabled = false;
+  $("progressWrap").style.display = "block";
+  $("progressFill").style.width = "0%";
+  $("progressPct").textContent = "0%";
+  $("progressInfo").textContent = "";
+  $("logBox").style.display = "block";
+  $("openDirBtn").style.display = "none";
+
+  const params = collectEncoderParams();
+
+  // copy 模式只能直接拼接编码完全一致的文件，也不能裁剪：提前提示
+  if (params.platform === "copy") {
+    if (isClipping("batch")) {
+      toast("不转码（copy）不能裁剪：请先清零片头 / 片尾，或改用转码后再合并", "warn");
+      isBatchRunning = false;
+      isMerging = false;
+      btn.disabled = false;
+      stopBtn.style.display = "none";
+      updateSubmitLabel();
+      return;
+    }
+    toast("copy 模式只能合并编码 / 分辨率完全一致的文件，否则请选择转码", "warn");
+  }
+
+  // 智能模式没法给多个文件统一参数，合并按软件 H.264 处理
+  if (params.platform === "smart") {
+    params.platform = "software";
+    params.format = "h264";
+    params.quality_value = 23;
+    params.bitrate = "";
+    params.preset = "medium";
+    toast("合并不能使用智能模式，已按软件 H.264 转码", "warn");
+  }
+
+  const payload = Object.assign({
+    inputs: batchQueue.map(it => it.path),
+    output: outPath,
+    head_trim: $("headTrim").value.trim(),
+    tail_trim: $("tailTrim").value.trim(),
+  }, params);
+
+  let status = "failed";
+  let error = "";
+  try {
+    const d = await postMerge(payload);
+    if (d.error) {
+      error = d.error;
+      const userCancelled = error.includes("已取消");
+      toast(userCancelled ? error : "合并失败：" + error,
+            userCancelled ? "warn" : "error");
+    } else {
+      currentTaskId = d.task_id;
+      $("logBox").textContent = "$ " + (d.cmd || "") +
+        (d.audio_note ? "\n\n[提示] " + d.audio_note : "");
+      const t = await waitForTask(d.task_id);
+      status = t.status;
+      error = t.error || "";
+      updateProgressUI(t);
+    }
+  } catch (e) {
+    error = String(e);
+    toast("合并失败：" + error, "error");
+  }
+
+  currentTaskId = null;
+  isBatchRunning = false;
+  isMerging = false;
+  batchDone = status === "cancelled" ? 0 : batchQueue.length;
+  const outName = splitPath(outPath).filename;
+  batchQueue.forEach(item => {
+    item.status = status;
+    item.error = status === "failed" ? error : "";
+    item.taskId = null;
+    item.outName = outName;
+  });
+  saveBatchState();
+  renderQueue();
+
+  btn.disabled = false;
+  stopBtn.style.display = "none";
+  stopBtn.textContent = "中止";
+  stopBtn.disabled = false;
+  updateSubmitLabel();
+
+  if (status === "completed") {
+    $("openDirBtn").style.display = "inline-block";
+    refreshView();
+    toast(`合并完成：${batchQueue.length} 个文件 → ${outName}`, "ok");
+  } else if (status === "cancelled") {
+    toast("合并已中止", "warn");
   }
 }
 
@@ -1850,6 +1990,7 @@ async function runBatch(opts) {
   $("openDirBtn").style.display = "none";
 
   const platform = $("platform").value;
+  const trimMode = clipMode();   // 队列中每个文件都按当前剪辑模式的时间规则处理
   let successCount = batchQueue.filter(it => it.status === "completed").length;
   let failedCount = batchQueue.filter(it => it.status === "failed").length;
 
@@ -1877,7 +2018,12 @@ async function runBatch(opts) {
     const item = batchQueue[i];
     if (resume && isTerminalStatus(item.status)) continue;   // 已结束的项直接跳过
 
-    const outPath = computeOutputPath(item.path, "batch");
+    // 队列只有一个文件时，沿用右侧「输出文件」里用户填写的路径；多个文件自动按源文件名生成
+    const useUiOut = !resume && batchQueue.length === 1 &&
+      item.path === $("inputPath").value.trim() && !!$("outputPath").value.trim();
+    const outPath = useUiOut
+      ? $("outputPath").value.trim()
+      : computeOutputPath(item.path, trimMode);
     let taskId = null;
 
     if (resume && item.status === "running") {
@@ -1918,7 +2064,7 @@ async function runBatch(opts) {
             continue;
           }
           const params = resolveSmartParams(srcInfo);
-          payload = buildPayload(item.path, outPath, { trim: "batch", params });
+          payload = buildPayload(item.path, outPath, { trim: trimMode, params });
           $("logBox").textContent =
             `[${i + 1}/${batchQueue.length}] ${item.name}\n` +
             `🧠 智能选择：${params.platform} / ${params.format} / ` +
@@ -1928,7 +2074,7 @@ async function runBatch(opts) {
           continue;
         }
       } else {
-        payload = buildPayload(item.path, outPath, { trim: "batch" });
+        payload = buildPayload(item.path, outPath, { trim: trimMode });
       }
 
       try {
@@ -1978,7 +2124,7 @@ async function runBatch(opts) {
   btn.disabled = false;
   stopBtn.style.display = "none";
   btn.textContent = `批量完成（成功 ${successCount} / 失败 ${failedCount}）`;
-  setTimeout(() => { btn.textContent = "开始转码"; }, 3000);
+  setTimeout(updateSubmitLabel, 3000);
   renderQueue();
   saveBatchState();
 
@@ -1994,10 +2140,12 @@ async function runBatch(opts) {
 async function stopTask() {
   if (!currentTaskId && !isBatchRunning) return;
   const stopBtn = $("stopBtn");
-  const msg = isBatchRunning ? "确定要中止批量任务吗？" : "确定要中止当前任务吗？";
+  const msg = isMerging ? "确定要中止合并吗？"
+    : isBatchRunning ? "确定要中止批量任务吗？" : "确定要中止当前任务吗？";
   if (!confirm(msg + "已生成的部分文件会被保留。")) return;
 
-  if (isBatchRunning) {
+  // 合并是一次性任务：不写批量续跑状态，避免刷新后重跑
+  if (isBatchRunning && !isMerging) {
     batchCancelled = true;
     saveBatchState();
   }

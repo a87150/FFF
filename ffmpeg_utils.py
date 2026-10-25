@@ -7,11 +7,12 @@ FFmpeg / FFprobe 工具层：文件探测、命令构建、容器兼容性检查
 
 import json
 import os
+import re
 import subprocess
 
 from config import (CONTAINER_AUDIO_CODECS, CONTAINER_FALLBACK_ACODEC,
-                    CONTAINER_VIDEO_CODECS, FFMPEG, FFPROBE, IS_LINUX,
-                    VAAPI_DEVICE, VIDEO_EXTS)
+                    CONTAINER_VIDEO_CODECS, FASTSTART_EXTS, FFMPEG, FFPROBE,
+                    IS_LINUX, VAAPI_DEVICE, VIDEO_EXTS)
 
 
 def output_ext(path):
@@ -288,3 +289,187 @@ def build_encoder(platform_name, fmt, quality_value, bitrate, preset, scale):
         return None, [], [], []
 
     return enc, pre, vf, enc_args
+
+
+# ==================== 合并（把队列里的多个文件按顺序拼成一个） ====================
+
+def merge_stream_signature(info):
+    """提取视频 / 音频流的特征，用于判断能否用 copy 直接拼接"""
+    video = audio = None
+    for s in (info or {}).get("streams", []):
+        if s.get("codec_type") == "video" and video is None:
+            video = s
+        elif s.get("codec_type") == "audio" and audio is None:
+            audio = s
+    vkey = (video.get("codec_name"), video.get("width"), video.get("height"),
+            video.get("pix_fmt"), video.get("r_frame_rate")) if video else None
+    akey = (audio.get("codec_name"), audio.get("sample_rate"), audio.get("channels")) if audio else None
+    return vkey, akey
+
+
+def can_merge_copy(infos):
+    """所有文件的视频 / 音频流特征完全一致时，才能用 concat demuxer + -c copy 直接合并"""
+    if len(infos) < 2:
+        return False
+    signatures = [merge_stream_signature(i) for i in infos]
+    first = signatures[0]
+    if not first[0]:
+        return False
+    return all(sig == first for sig in signatures)
+
+
+def merge_audio_fallback(out_ext, acodec, abitrate):
+    """合并必须重新编码音频：copy / 空值自动换成容器默认编码，返回 (编码, 码率, 提示)"""
+    if acodec and acodec != "copy":
+        return acodec, abitrate, ""
+    fallback = CONTAINER_FALLBACK_ACODEC.get(out_ext)
+    if fallback:
+        codec, label = fallback
+        return codec, abitrate or ("128k" if codec == "libopus" else "192k"), \
+               f"合并需要重新编码音频，已自动改为 {label}"
+    return "aac", abitrate or "192k", "合并需要重新编码音频，已自动改为 AAC"
+
+
+def _merge_target(infos, scale):
+    """合并目标 (宽, 高, 帧率)：优先用户指定的 scale，否则用第一个文件的尺寸"""
+    first = None
+    for s in (infos[0] or {}).get("streams", []):
+        if s.get("codec_type") == "video":
+            first = s
+            break
+    if not first:
+        return None
+    try:
+        w0, h0 = int(first.get("width")), int(first.get("height"))
+    except (TypeError, ValueError):
+        return None
+    if w0 <= 0 or h0 <= 0:
+        return None
+
+    fps = first.get("r_frame_rate") or "30"
+    if not re.match(r"^\d+(\.\d+)?/\d+(\.\d+)?$", fps):
+        fps = "30"
+
+    scale = (scale or "").strip()
+    m = re.match(r"^(\d+):(\d+)$", scale)
+    if m:
+        return int(m.group(1)), int(m.group(2)), fps
+    m = re.match(r"^(-?\d+):(-?\d+)$", scale)
+    if m:
+        sw, sh = int(m.group(1)), int(m.group(2))
+        if sw <= 0 and sh <= 0:
+            return w0, h0, fps
+        if sw <= 0:
+            return max(2, int(round(sh * w0 / h0 / 2.0)) * 2), sh, fps
+        if sh <= 0:
+            return sw, max(2, int(round(sw * h0 / w0 / 2.0)) * 2), fps
+        return sw, sh, fps
+    return w0, h0, fps
+
+
+def build_merge_command(entries, output_path, platform_name, fmt, quality_value,
+                        bitrate, preset, scale, acodec="aac", abitrate="",
+                        extra="", head_trim="", tail_trim=""):
+    """
+    构建「重新编码合并」命令（filter_complex + concat 滤镜，自动统一分辨率 / 帧率 / 音频）。
+    entries: [{"path": 文件路径, "info": ffprobe 结果}]
+    返回 (cmd, total_duration, note)；参数不合理时 cmd 为 None，note 为错误信息。
+    """
+    if len(entries) < 2:
+        return None, 0.0, "合并至少需要 2 个文件"
+
+    infos = [e.get("info") or {} for e in entries]
+    target = _merge_target(infos, scale)
+    if not target:
+        return None, 0.0, "无法读取视频尺寸 / 帧率，不能合并这些文件"
+    width, height, fps = target
+
+    enc, pre_input, vf_extra, enc_args = build_encoder(
+        platform_name, fmt, quality_value, bitrate, preset, "")
+    if enc is None:
+        return None, 0.0, f"当前平台不支持合并：{platform_name}/{fmt}"
+
+    out_ext = output_ext(output_path)
+    acodec, abitrate, audio_note = merge_audio_fallback(out_ext, acodec, abitrate)
+
+    head = parse_time(head_trim) if head_trim and head_trim != "00:00:00" else 0.0
+    tail = parse_time(tail_trim) if tail_trim and tail_trim != "00:00:00" else 0.0
+
+    parts, concat_in = [], []
+    total, known_duration = 0.0, True
+    for i, entry in enumerate(entries):
+        info = entry.get("info") or {}
+        try:
+            dur = float((info.get("format") or {}).get("duration"))
+        except (TypeError, ValueError):
+            dur, known_duration = 0.0, False
+
+        start = head
+        end = dur - tail if dur > 0 else 0.0
+        if dur > 0 and end <= start:
+            return None, 0.0, "片头 / 片尾裁剪后时长为 0，请检查裁剪时间"
+        seg = (end - start) if dur > 0 else 0.0
+        if dur > 0:
+            total += seg
+
+        needs_trim = start > 0 or (dur > 0 and end < dur)
+        trim_v = f"trim=start={start:.3f}:end={end:.3f}," if needs_trim else ""
+        trim_a = f"atrim=start={start:.3f}:end={end:.3f}," if needs_trim else ""
+        parts.append(
+            f"[{i}:v]{trim_v}setpts=PTS-STARTPTS,"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}[v{i}]")
+
+        has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams", []))
+        if has_audio:
+            parts.append(
+                f"[{i}:a]{trim_a}asetpts=PTS-STARTPTS,aresample=48000,"
+                f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]")
+        else:
+            if dur <= 0:
+                return None, 0.0, "合并的文件缺少音频且无法读取时长，不能自动补齐静音"
+            parts.append(
+                f"anullsrc=r=48000:cl=stereo,atrim=0:{seg:.3f},"
+                f"asetpts=PTS-STARTPTS[a{i}]")
+        concat_in.append(f"[v{i}][a{i}]")
+
+    parts.append("".join(concat_in) + f"concat=n={len(entries)}:v=1:a=1[vcat][acat]")
+    vmap = "[vcat]"
+    if vf_extra:   # VAAPI 等需要在最后统一上传到显卡
+        parts.append("[vcat]" + ",".join(vf_extra) + "[vout]")
+        vmap = "[vout]"
+
+    cmd = [FFMPEG, "-y", "-hide_banner", "-nostats", "-progress", "pipe:1"]
+    cmd += pre_input
+    for entry in entries:
+        cmd += ["-i", entry.get("path", "")]
+    cmd += ["-filter_complex", ";".join(parts),
+            "-map", vmap, "-map", "[acat]",
+            "-c:v", enc] + enc_args
+    cmd += ["-c:a", acodec]
+    if abitrate:
+        cmd += ["-b:a", abitrate]
+    if extra:
+        cmd += extra.split()
+    if out_ext in FASTSTART_EXTS:
+        cmd += ["-movflags", "+faststart"]
+    cmd += [output_path]
+
+    return cmd, (round(total, 3) if known_duration else None), audio_note
+
+
+def build_merge_copy_command(output_path, concat_list_path):
+    """同编码 copy 合并：concat demuxer 读列表文件，不重新编码（快、无损）"""
+    cmd = [FFMPEG, "-y", "-hide_banner", "-nostats", "-progress", "pipe:1",
+           "-f", "concat", "-safe", "0", "-i", concat_list_path, "-c", "copy"]
+    if output_ext(output_path) in FASTSTART_EXTS:
+        cmd += ["-movflags", "+faststart"]
+    cmd += [output_path]
+    return cmd
+
+
+def write_concat_list(paths, list_path):
+    """写 concat demuxer 的列表文件（统一用 /，并转义单引号）"""
+    with open(list_path, "w", encoding="utf-8") as f:
+        for p in paths:
+            f.write("file '" + p.replace("\\", "/").replace("'", "'\\''") + "'\n")

@@ -44,17 +44,17 @@
         <button onclick="selectAllVisible()" title="全选当前筛选可见的视频">全选</button>
         <button onclick="invertSelection()" title="反选当前筛选可见的视频">反选</button>
         <button onclick="clearSelection()" title="清空勾选">清空</button>
-        <button class="primary" id="addSelBtn" onclick="addSelectedToQueue()" title="把勾选的视频加入批量队列" disabled>加入所选 (0)</button>
+        <button class="primary" id="addSelBtn" onclick="addSelectedToQueue()" title="把勾选的视频加入处理队列" disabled>加入所选 (0)</button>
       </div>
     </div>
 
     <ul class="filelist" id="filelist"></ul>
   </div>
 
-  <!-- ============ 中：批量队列 ============ -->
+  <!-- ============ 中：处理队列 ============ -->
   <div class="panel panel-mid">
     <div class="queue-header">
-      <h2 style="margin:0">批量队列 <span id="queueCount" class="queue-count">0</span></h2>
+      <h2 style="margin:0">处理队列 <span id="queueCount" class="queue-count">0</span></h2>
       <div class="queue-header-btns">
         <button class="queue-btn" onclick="retryFailed()" title="把失败/中止的项目重置为待处理">重试失败</button>
         <button class="queue-btn" onclick="clearCompleted()" title="清空已完成">清完成</button>
@@ -64,7 +64,7 @@
 
     <div class="queue-hint" id="queueHint">
       在左侧文件上悬停点 + 加入，或勾选多个后点「加入所选」<br>
-      支持批量去片头片尾、批量转码
+      开始转码会处理队列中的全部文件；选「合并」则按顺序合成一个（当前选中的文件也会自动加入）
     </div>
 
     <div class="queue-scroll" id="queueScroll">
@@ -100,16 +100,20 @@
       <span id="clipEndTip">--:--:--</span>
     </div>
 
-    <div class="clip-section-label">剪辑模式（切换后时间输入规则随之变化）</div>
+    <div class="clip-section-label">剪辑模式（决定时间规则；合并模式会按队列顺序合成一个文件）</div>
 
     <div class="clip-mode">
       <label class="clip-mode-opt">
         <input type="radio" name="clipMode" value="single" checked>
-        <span>单文件精确剪辑</span>
+        <span>精确剪辑（起始 / 结束）</span>
       </label>
       <label class="clip-mode-opt">
         <input type="radio" name="clipMode" value="batch">
-        <span>批量裁剪（队列全部文件）</span>
+        <span>批量裁剪（片头 / 片尾）</span>
+      </label>
+      <label class="clip-mode-opt">
+        <input type="radio" name="clipMode" value="merge">
+        <span>合并（按队列顺序）</span>
       </label>
     </div>
 
@@ -151,6 +155,12 @@
       </div>
 
       <div class="hint" style="margin-top:8px">片头 / 片尾为相对时长，从每个文件开头 / 结尾去掉</div>
+    </div>
+
+    <div class="hint" id="mergeNote" style="display:none;margin-top:8px">
+      合并模式：按队列顺序把全部文件拼成一个文件，片头 / 片尾会应用到每个文件；<br>
+      输出路径用下方「输出文件」指定，未手动修改时按第一个文件生成 *_merge。<br>
+      不转码（copy）只能直接合并编码、分辨率完全一致的文件，其余情况请选择转码。
     </div>
 
     <h2 style="margin-top:18px">转码参数</h2>
@@ -264,7 +274,7 @@
     </div>
 
     <div class="form-group">
-      <label>输出文件</label>
+      <label>输出文件（单个文件或合并时生效）</label>
       <input type="text" id="outputPath" placeholder="/path/to/output.mp4">
     </div>
 
@@ -277,7 +287,7 @@
     </div>
 
     <div class="action-row">
-      <button class="primary" id="submitBtn" onclick="submitTask()">开始转码</button>
+      <button class="primary" id="submitBtn" onclick="submitTask()" title="处理队列中的全部文件">开始转码</button>
       <button class="stop-btn" id="stopBtn" onclick="stopTask()" style="display:none;">中止</button>
       <button class="dir-btn" id="openDirBtn" onclick="openOutputDir()" style="display:none;" title="在左侧文件浏览器中打开输出目录">📂 输出目录</button>
     </div>
